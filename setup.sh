@@ -21,9 +21,10 @@ echo "[1/8] Installing system packages..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     build-essential cmake gcc g++ \
+    libtbb-dev \
     libibverbs-dev librdmacm-dev rdma-core ibverbs-utils \
-    perftest \
-    libmemcached-dev memcached libcityhash-dev \
+    perftest google-perftools libgoogle-perftools-dev \
+    libmemcached-dev memcached libboost-all-dev \
     git numactl htop linux-tools-common iotop \
     python3 python3-pip python3-venv \
     pdsh tmux screen \
@@ -96,6 +97,19 @@ fi
 
 # ---- Build DEX ----
 echo "[6/8] Building DEX..."
+
+# ---- Fix /mydata ownership ----
+echo "Fixing /mydata permissions..."
+sudo chown -R "$(whoami)" /mydata
+sudo chmod -R 755 /mydata
+
+# ---- Install CityHash ----
+echo "Installing CityHash..."
+cd /tmp
+git clone https://github.com/google/cityhash.git
+cd cityhash
+./configure && make all CXXFLAGS="-g -O3" && sudo make install && sudo ldconfig || echo "  WARNING: CityHash installation failed"
+
 cd /mydata
 if [ ! -d "dex" ]; then
     git clone https://github.com/baotonglu/dex.git
@@ -114,30 +128,30 @@ cp ../script/run*.sh . 2>/dev/null || true
 echo "  DEX build: SUCCESS"
 
 # ---- Build Sherman (baseline) ----
-echo "[7/8] Building Sherman..."
-cd /mydata
-if [ ! -d "Sherman" ]; then
-    git clone https://github.com/thustorage/Sherman.git
-fi
-cd Sherman
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
-make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: Sherman build had issues"
-echo "  Sherman build: ATTEMPTED"
+# echo "[7/8] Building Sherman..."
+# cd /mydata
+# if [ ! -d "Sherman" ]; then
+#     git clone https://github.com/thustorage/Sherman.git
+# fi
+# cd Sherman
+# mkdir -p build && cd build
+# cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
+# make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: Sherman build had issues"
+# echo "  Sherman build: ATTEMPTED"
 
-# ---- Build SMART (baseline) ----
-echo "[8/8] Building SMART..."
-cd /mydata
-if [ ! -d "SMART" ]; then
-    git clone https://github.com/dmemsys/SMART.git
-fi
-cd SMART
-# Install SMART dependencies
-sh ./script/installMLNX.sh 2>/dev/null || echo "  WARNING: SMART dependency installation had issues"
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
-make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: SMART build had issues"
-echo "  SMART build: ATTEMPTED"
+# # ---- Build SMART (baseline) ----
+# echo "[8/8] Building SMART..."
+# cd /mydata
+# if [ ! -d "SMART" ]; then
+#     git clone https://github.com/dmemsys/SMART.git
+# fi
+# cd SMART
+# # Install SMART dependencies
+# sh ./script/installMLNX.sh 2>/dev/null || echo "  WARNING: SMART dependency installation had issues"
+# mkdir -p build && cd build
+# cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
+# make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: SMART build had issues"
+# echo "  SMART build: ATTEMPTED"
 
 # ---- Copy experiment scripts from repo ----
 echo "Copying experiment scripts to /mydata/scripts/..."
