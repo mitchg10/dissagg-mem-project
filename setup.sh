@@ -62,9 +62,16 @@ echo "[5/8] Discovering RDMA devices..."
 echo "  RDMA devices found:"
 ibv_devices 2>/dev/null || echo "  WARNING: No RDMA devices found"
 
-# Find the experiment network interface (10.10.1.x)
-EXP_IP=$(ip -4 addr show | grep "10.10.1" | awk '{print $2}' | cut -d/ -f1 || echo "")
-EXP_IFACE=$(ip -4 addr show | grep "10.10.1" -A0 | grep -oP '(?<=\s)\S+$' | head -1 || echo "")
+# Find the experiment network interface (10.10.1.x) — retry up to 60s
+EXP_IP=""
+EXP_IFACE=""
+for i in $(seq 1 12); do
+    EXP_IP=$(ip -4 addr show | grep "10.10.1" | awk '{print $2}' | cut -d/ -f1 | head -1 || echo "")
+    EXP_IFACE=$(ip -4 addr show | grep "10.10.1" | grep -oP '(?<=\s)\S+$' | head -1 || echo "")
+    [ -n "$EXP_IP" ] && break
+    echo "  Waiting for experiment interface (10.10.1.x)... attempt $i/12"
+    sleep 5
+done
 
 if [ -n "$EXP_IP" ]; then
     echo "  Experiment IP: $EXP_IP on interface $EXP_IFACE"
@@ -85,7 +92,7 @@ if [ -n "$EXP_IP" ]; then
         done
     fi
 else
-    echo "  WARNING: No experiment IP (10.10.1.x) found yet"
+    echo "  WARNING: No experiment IP (10.10.1.x) found after 60s"
     echo "  Control network only — experiment LAN may not be ready"
 fi
 
