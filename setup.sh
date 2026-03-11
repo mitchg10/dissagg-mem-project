@@ -112,7 +112,7 @@ sudo chmod -R 755 /mydata
 
 # ---- Install CityHash ----
 echo "Installing CityHash..."
-if ! pkg-config --exists cityhash 2>/dev/null; then
+if [ ! -d "/tmp/cityhash" ]; then
     cd /tmp
     git clone https://github.com/google/cityhash.git
     cd cityhash
