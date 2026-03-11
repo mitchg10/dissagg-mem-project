@@ -57,14 +57,9 @@ result_exists() {
 # Restart memcached state (clears QP info between runs)
 restart_memcached() {
     log "  Restarting memcached..."
-    # Kill and restart memcached
     pkill memcached 2>/dev/null || true
-    sleep 1
-    memcached -d -m 1024 -l "$MEMC_IP" -p "$MEMC_PORT"
-    sleep 1
-    # Also run DEX's own restart script if available
     cd "$DEX_DIR"
-    ./restartMemc.sh 2>/dev/null || true
+    ./restartMemc.sh
     log "  Memcached restarted."
 }
 
