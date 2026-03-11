@@ -65,6 +65,7 @@ restart_memcached() {
     # Also run DEX's own restart script if available
     cd "$DEX_DIR"
     ./restartMemc.sh 2>/dev/null || true
+    log "  Memcached restarted."
 }
 
 # Run a single experiment across all nodes
@@ -76,6 +77,7 @@ run_experiment() {
     local threads="$4"
     local extra="${5:-}"
     local tag="${system}_${workload}_${dist}_${threads}t${extra:+_$extra}"
+    log "Starting experiment: $tag"
 
     # Resume support
     if $RESUME && result_exists "$tag" >/dev/null 2>&1; then
@@ -91,16 +93,6 @@ run_experiment() {
 
     # Restart memcached before each run
     restart_memcached
-
-    # NOTE: The actual command depends on DEX's run.sh interface.
-    # You MUST inspect the DEX source to determine exact CLI flags.
-    # Below is a template — adapt the flags after examining:
-    #   /mydata/dex/script/run.sh
-    #   /mydata/dex/build/ executables
-    #
-    # Common patterns in RDMA B+-tree benchmarks:
-    #   ./benchmark --workload <type> --threads <n> --distribution <dist>
-    #   or configured via environment variables in run.sh
 
     cd "$DEX_DIR"
 
@@ -134,6 +126,7 @@ run_experiment() {
                 return 1
                 ;;
         esac
+        log "  Mapped workload '$workload' to DEX op_index=$op_index"
 
         # Map distribution to DEX's uniform/zipf knobs.
         local uniform_flag zipf_theta
@@ -151,6 +144,7 @@ run_experiment() {
                 return 1
                 ;;
         esac
+        log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
 
         # Operation mixes mirrored from dex/script/run.sh.
         local read_arr=(100 50 95 0 0)
@@ -205,6 +199,7 @@ run_experiment() {
         } > "$exp_dir/output.log"
 
         # Run the benchmark, appending full output.
+        log "  Running DEX benchmark command: ${cmd[*]}"
         "${cmd[@]}" >> "$exp_dir/output.log" 2>&1
     else
         # Non-DEX systems are not yet wired up; keep previous placeholder behavior.
