@@ -105,10 +105,14 @@ sudo chmod -R 755 /mydata
 
 # ---- Install CityHash ----
 echo "Installing CityHash..."
-cd /tmp
-git clone https://github.com/google/cityhash.git
-cd cityhash
-./configure && make all CXXFLAGS="-g -O3" && sudo make install && sudo ldconfig || echo "  WARNING: CityHash installation failed"
+if ! pkg-config --exists cityhash 2>/dev/null; then
+    cd /tmp
+    git clone https://github.com/google/cityhash.git
+    cd cityhash
+    ./configure && make all CXXFLAGS="-g -O3" && sudo make install && sudo ldconfig || echo "  WARNING: CityHash installation failed"
+else
+    echo "  CityHash already installed"
+fi
 
 cd /mydata
 if [ ! -d "dex" ]; then
@@ -182,6 +186,12 @@ echo "  GCC:            $(gcc --version | head -1)"
 echo "  DEX:            /mydata/dex/build/"
 echo "  Sherman:        /mydata/Sherman/build/"
 echo "  SMART:          /mydata/SMART/build/"
+echo "============================================="
+echo ""
+echo "NOTE: Inter-node SSH not yet configured."
+echo "Run this ONCE from your local machine to enable node-0 → all-nodes SSH:"
+echo "  bash /local/repository/scripts/setup_ssh.sh"
+echo "This is required before running verify_cluster.sh."
 echo "============================================="
 
 echo "DONE" > "$STATUS_FILE"
