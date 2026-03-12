@@ -43,9 +43,9 @@ echo "  GCC version: $(gcc --version | head -1)"
 
 # ---- Hugepages ----
 echo "[3/8] Configuring hugepages..."
-echo 4096 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
+echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
 if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf; then
-    echo "vm.nr_hugepages = 4096" | sudo tee -a /etc/sysctl.conf > /dev/null
+    echo "vm.nr_hugepages = 32768" | sudo tee -a /etc/sysctl.conf > /dev/null
 fi
 sudo sysctl -p > /dev/null 2>&1
 HP_TOTAL=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
@@ -132,6 +132,9 @@ mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
 make -j$(nproc) 2>&1 | tail -5
 
+# Re-assert hugepages in case DEX's hugepage.sh overrode our setting
+echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
+
 # Copy run scripts into build dir
 cp ../script/restartMemc.sh . 2>/dev/null || true
 cp ../script/run*.sh . 2>/dev/null || true
@@ -174,6 +177,12 @@ chmod +x /mydata/scripts/*.sh 2>/dev/null || true
 # ---- Generate memcached.conf (node-0 = 10.10.1.1 is coordinator) ----
 mkdir -p /mydata/configs
 cat > /mydata/dex/build/memcached.conf << 'EOF'
+10.10.1.1
+11211
+EOF
+
+# Also write to dex/ root — restartMemc.sh reads ../memcached.conf relative to build/
+cat > /mydata/dex/memcached.conf << 'EOF'
 10.10.1.1
 11211
 EOF
