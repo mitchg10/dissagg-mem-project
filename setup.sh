@@ -33,13 +33,19 @@ fi
 echo "  GCC version: $(gcc --version | head -1)"
 
 echo "Configuring hugepages..."
+sync
+echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
 echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
 if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf; then
     echo "vm.nr_hugepages = 32768" | sudo tee -a /etc/sysctl.conf > /dev/null
 fi
 sudo sysctl -p > /dev/null 2>&1
+HP_FREE=$(grep HugePages_Free /proc/meminfo | awk '{print $2}')
 HP_TOTAL=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
-echo "  Hugepages allocated: $HP_TOTAL"
+echo "  Hugepages allocated: $HP_TOTAL (free: $HP_FREE)"
+if [ "$HP_FREE" -lt 32768 ]; then
+    echo "  WARNING: Only $HP_FREE hugepages free, need 32768 for 64GB DSM"
+fi
 
 echo "Setting CPU governor to performance..."
 for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
@@ -118,9 +124,11 @@ cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
 make -j$(nproc) 2>&1 | tail -5
 
 # Re-assert hugepages because DEX build overrides
+sync
+echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
 echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
 
-cp ../script/restartMemc.sh . 2>/dev/null || true
+bash /local/repository/scripts/gen_dex_restartMemc.sh restartMemc.sh # Fix DEX's restartMemc.sh
 cp ../script/run*.sh . 2>/dev/null || true
 
 echo "  DEX build: SUCCESS"
@@ -157,10 +165,7 @@ chmod +x /mydata/scripts/*.sh 2>/dev/null || true
 
 echo "Generating memcached.conf..."
 mkdir -p /mydata/configs
-cat > /mydata/dex/build/memcached.conf << 'EOF'
-10.10.1.1
-11211
-EOF
+printf '%s\n%s\n' "${EXP_IP:-10.10.1.1}" "11211" > /mydata/dex/build/memcached.conf
 
 pip3 install matplotlib pandas numpy --break-system-packages -q 2>/dev/null &
 
