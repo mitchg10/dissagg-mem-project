@@ -44,6 +44,9 @@ done
 mkdir -p "$RESULTS_DIR"
 LOG_FILE="${RESULTS_DIR}/orchestrator.log"
 
+# PIDs of background SSH sessions running memory-node newbench processes.
+MEMORY_PIDS=()
+
 log() {
     echo "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
@@ -54,8 +57,44 @@ result_exists() {
     ls "${RESULTS_BASE}"/*/experiment_${tag}.done 2>/dev/null | head -1
 }
 
-# Restart memcached state (clears QP info between runs)
+# Kill newbench on memory nodes (nodes 1..kNodeCount-1) via SSH.
+kill_memory_nodes() {
+    local kNodeCount="$1"
+    for (( i=1; i<kNodeCount; i++ )); do
+        local node="${NODES[$i]}"
+        log "  Killing newbench on $node..."
+        ssh -o StrictHostKeyChecking=no "$node" \
+            "sudo pkill -9 newbench 2>/dev/null || true" || true
+    done
+    # Also reap any lingering background SSH PIDs from the previous run.
+    for pid in "${MEMORY_PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+    MEMORY_PIDS=()
+}
+
+# Start newbench on memory nodes in the background via SSH.
+# All nodes run the identical binary+args; role is assigned by memcached counter order.
+start_memory_nodes() {
+    local kNodeCount="$1"
+    shift
+    local mem_cmd="$*"
+    MEMORY_PIDS=()
+    for (( i=1; i<kNodeCount; i++ )); do
+        local node="${NODES[$i]}"
+        log "  Starting memory server on $node..."
+        # Redirect output to the same results dir so it is captured alongside node-0.
+        ssh -o StrictHostKeyChecking=no "$node" \
+            "cd $DEX_DIR && $mem_cmd" >> "${CURRENT_EXP_DIR}/${node}_output.log" 2>&1 &
+        MEMORY_PIDS+=($!)
+    done
+}
+
+# Restart memcached state (clears QP info between runs).
+# Also kills any live memory-node newbench processes first.
 restart_memcached() {
+    local kNodeCount="$1"
+    kill_memory_nodes "$kNodeCount"
     log "  Restarting memcached..."
     pkill memcached 2>/dev/null || true
     cd "$DEX_DIR"
@@ -81,13 +120,15 @@ run_experiment() {
     fi
 
     local exp_dir="${RESULTS_DIR}/${tag}"
+    # Expose to start_memory_nodes() so it can direct remote output here.
+    CURRENT_EXP_DIR="$exp_dir"
     mkdir -p "$exp_dir"
 
     log "  RUN: $tag"
     local start_time=$(date +%s)
 
-    # Restart memcached before each run
-    restart_memcached
+    # Restart memcached before each run (also kills any live memory-node newbench)
+    restart_memcached "$kNodeCount"
 
     cd "$DEX_DIR"
 
@@ -193,9 +234,24 @@ run_experiment() {
             echo ""
         } > "$exp_dir/output.log"
 
-        # Run the benchmark, appending full output.
+        # Launch node-0 (compute) first so it wins the memcached serverNum race
+        # and gets nodeID 0.  Memory nodes start 0.5s later via SSH and get
+        # nodeIDs 1+.  Node-0 blocks at the DSM-init barrier until all
+        # kNodeCount nodes have joined, then the experiment runs normally.
         log "  Running DEX benchmark command: ${cmd[*]}"
-        "${cmd[@]}" >> "$exp_dir/output.log" 2>&1
+        "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
+        local node0_pid=$!
+
+        # Give node-0 a moment to call serverEnter() and claim nodeID 0 before
+        # the SSH-started memory nodes connect to memcached.
+        sleep 0.5
+
+        start_memory_nodes "$kNodeCount" "${cmd[*]}"
+
+        # Wait for the compute-node benchmark to finish, then tear down servers.
+        wait "$node0_pid"
+        local bench_exit=$?
+        kill_memory_nodes "$kNodeCount"
     else
         # Non-DEX systems are not yet wired up; keep previous placeholder behavior.
         echo "PLACEHOLDER: Benchmark invocation for system '$system' not yet implemented." > "$exp_dir/output.log"
