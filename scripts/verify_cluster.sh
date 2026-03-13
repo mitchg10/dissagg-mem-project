@@ -27,7 +27,7 @@ echo ""
 echo "=== Setup Status ==="
 for node in "${NODES[@]}"; do
     status=$(ssh -o StrictHostKeyChecking=no "$node" "cat /local/setup_status.txt 2>/dev/null" || echo "UNREACHABLE")
-    if [ "$status" = "DONE" ]; then
+    if [ "$status" = "RUNNING" ]; then
         check 0 "$node setup complete"
     else
         check 1 "$node setup status: $status"
