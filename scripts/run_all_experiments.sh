@@ -127,6 +127,8 @@ run_experiment() {
     log "  RUN: $tag"
     local start_time=$(date +%s)
 
+    local kNodeCount=2   # matches nodenum in run.sh (1 compute + 1 memory node)
+
     # Restart memcached before each run (also kills any live memory-node newbench)
     restart_memcached "$kNodeCount"
 
@@ -196,7 +198,6 @@ run_experiment() {
         log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
 
         # DEX benchmark parameters (mirroring script defaults where possible).
-        local kNodeCount=2          # matches nodenum in run.sh
         local mem_threads=4         # mem_threads[1] in run.sh
         local cache_mb=256          # cache[3] in run.sh
         local bulk_million=50       # bulk in run.sh
