@@ -1,23 +1,15 @@
 #!/bin/bash
-# setup.sh — Runs automatically on each node at boot via CloudLab profile.
-# Installs all dependencies, verifies RDMA, builds DEX + baselines.
-#
-# Logs to /local/logs/setup.log — check this first if something breaks.
-# Status file: /local/setup_status.txt — "DONE" when complete.
 
 set -euo pipefail
 mkdir -p /local/logs
 exec > >(tee -a /local/logs/setup.log) 2>&1
 
-echo "============================================="
 echo "DEX Setup: $(hostname) — $(date)"
-echo "============================================="
 
 STATUS_FILE="/local/setup_status.txt"
 echo "RUNNING" > "$STATUS_FILE"
 
-# ---- System packages ----
-echo "[1/8] Installing system packages..."
+echo "Installing system packages..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     build-essential cmake gcc g++ \
@@ -30,8 +22,7 @@ sudo apt-get install -y -qq \
     pdsh tmux screen \
     2>&1 | tail -5
 
-# ---- GCC 13 (to match paper: GCC 13.1.1) ----
-echo "[2/8] Installing GCC 13..."
+echo "Installing GCC 13..."
 if ! gcc-13 --version &>/dev/null; then
     sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y >/dev/null 2>&1
     sudo apt-get update -qq
@@ -41,8 +32,7 @@ if ! gcc-13 --version &>/dev/null; then
 fi
 echo "  GCC version: $(gcc --version | head -1)"
 
-# ---- Hugepages ----
-echo "[3/8] Configuring hugepages..."
+echo "Configuring hugepages..."
 echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
 if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf; then
     echo "vm.nr_hugepages = 32768" | sudo tee -a /etc/sysctl.conf > /dev/null
@@ -51,14 +41,12 @@ sudo sysctl -p > /dev/null 2>&1
 HP_TOTAL=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
 echo "  Hugepages allocated: $HP_TOTAL"
 
-# ---- CPU performance mode ----
-echo "[4/8] Setting CPU governor to performance..."
+echo "Setting CPU governor to performance..."
 for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
     echo performance | sudo tee "$cpu" > /dev/null 2>&1 || true
 done
 
-# ---- RDMA device discovery ----
-echo "[5/8] Discovering RDMA devices..."
+echo "Discovering RDMA devices..."
 echo "  RDMA devices found:"
 ibv_devices 2>/dev/null || echo "  WARNING: No RDMA devices found"
 
@@ -96,21 +84,17 @@ else
     echo "  Control network only — experiment LAN may not be ready"
 fi
 
-# ---- Set MTU to 9000 (jumbo frames) for experiment interface ----
 if [ -n "$EXP_IFACE" ]; then
     echo "  Setting jumbo frames on $EXP_IFACE..."
     sudo ip link set "$EXP_IFACE" mtu 9000 2>/dev/null || true
 fi
 
-# ---- Build DEX ----
-echo "[6/8] Building DEX..."
+echo "Building DEX..."
 
-# ---- Fix /mydata ownership ----
-echo "Fixing /mydata permissions..."
 sudo chown -R "$(whoami)" /mydata
 sudo chmod -R 755 /mydata
 
-# ---- Install CityHash ----
+# Install CityHash dependency from source
 echo "Installing CityHash..."
 if [ ! -d "/tmp/cityhash" ]; then
     cd /tmp
@@ -121,6 +105,7 @@ else
     echo "  CityHash already installed"
 fi
 
+# Install DEX
 cd /mydata
 if [ ! -d "dex" ]; then
     git clone https://github.com/baotonglu/dex.git
@@ -132,17 +117,15 @@ mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
 make -j$(nproc) 2>&1 | tail -5
 
-# Re-assert hugepages in case DEX's hugepage.sh overrode our setting
+# Re-assert hugepages because DEX build overrides
 echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
 
-# Copy run scripts into build dir
 cp ../script/restartMemc.sh . 2>/dev/null || true
 cp ../script/run*.sh . 2>/dev/null || true
 
 echo "  DEX build: SUCCESS"
 
-# ---- Build Sherman (baseline) ----
-# echo "[7/8] Building Sherman..."
+# echo "Building Sherman..."
 # cd /mydata
 # if [ ! -d "Sherman" ]; then
 #     git clone https://github.com/thustorage/Sherman.git
@@ -153,8 +136,7 @@ echo "  DEX build: SUCCESS"
 # make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: Sherman build had issues"
 # echo "  Sherman build: ATTEMPTED"
 
-# # ---- Build SMART (baseline) ----
-# echo "[8/8] Building SMART..."
+# echo "Building SMART..."
 # cd /mydata
 # if [ ! -d "SMART" ]; then
 #     git clone https://github.com/dmemsys/SMART.git
@@ -167,47 +149,30 @@ echo "  DEX build: SUCCESS"
 # make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: SMART build had issues"
 # echo "  SMART build: ATTEMPTED"
 
-# ---- Copy experiment scripts from repo ----
 echo "Copying experiment scripts to /mydata/scripts/..."
 mkdir -p /mydata/scripts
 cp /local/repository/scripts/*.sh /mydata/scripts/ 2>/dev/null || true
 cp /local/repository/configs/* /mydata/configs/ 2>/dev/null || true
 chmod +x /mydata/scripts/*.sh 2>/dev/null || true
 
-# ---- Generate memcached.conf (node-0 = 10.10.1.1 is coordinator) ----
+echo "Generating memcached.conf..."
 mkdir -p /mydata/configs
 cat > /mydata/dex/build/memcached.conf << 'EOF'
 10.10.1.1
 11211
 EOF
 
-# Also write to dex/ root — restartMemc.sh reads ../memcached.conf relative to build/
-cat > /mydata/dex/memcached.conf << 'EOF'
-10.10.1.1
-11211
-EOF
-
-# ---- Python analysis dependencies (non-blocking) ----
 pip3 install matplotlib pandas numpy --break-system-packages -q 2>/dev/null &
 
-# ---- Summary ----
+# Summary
 echo ""
-echo "============================================="
 echo "Setup complete on $(hostname) at $(date)"
-echo "============================================="
-echo "  Experiment IP:  ${EXP_IP:-UNKNOWN}"
-echo "  RDMA device:    ${RDMA_DEV:-UNKNOWN}"
-echo "  Hugepages:      $HP_TOTAL"
-echo "  GCC:            $(gcc --version | head -1)"
-echo "  DEX:            /mydata/dex/build/"
-echo "  Sherman:        /mydata/Sherman/build/"
-echo "  SMART:          /mydata/SMART/build/"
-echo "============================================="
-echo ""
-echo "NOTE: Inter-node SSH not yet configured."
-echo "Run this ONCE from your local machine to enable node-0 → all-nodes SSH:"
-echo "  bash /local/repository/scripts/setup_ssh.sh"
-echo "This is required before running verify_cluster.sh."
-echo "============================================="
+echo "Experiment IP: ${EXP_IP:-UNKNOWN}"
+echo "RDMA device: ${RDMA_DEV:-UNKNOWN}"
+echo "Hugepages: $HP_TOTAL"
+echo "GCC: $(gcc --version | head -1)"
+echo "DEX: /mydata/dex/build/"
+# echo "  Sherman:        /mydata/Sherman/build/"
+# echo "  SMART:          /mydata/SMART/build/"
 
 echo "DONE" > "$STATUS_FILE"
