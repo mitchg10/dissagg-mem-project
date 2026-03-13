@@ -139,8 +139,6 @@ run_experiment() {
                 return 1
                 ;;
         esac
-        log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
-
         # Operation mixes mirrored from dex/script/run.sh.
         local read_arr=(100 50 95 0 0)
         local insert_arr=(0 0 0 100 5)
@@ -153,6 +151,8 @@ run_experiment() {
         local update_ratio=${update_arr[$op_index]}
         local delete_ratio=${delete_arr[$op_index]}
         local range_ratio=${range_arr[$op_index]}
+
+        log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
 
         # DEX benchmark parameters (mirroring script defaults where possible).
         local kNodeCount=2          # matches nodenum in run.sh
