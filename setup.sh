@@ -71,7 +71,7 @@ if [ -n "$EXP_IP" ]; then
     echo "  Experiment IP: $EXP_IP on interface $EXP_IFACE"
 
     # Map netdev to RDMA device
-    RDMA_DEV=$(rdma link show 2>/dev/null | grep "$EXP_IFACE" | awk '{print $2}' | cut -d/ -f1 || echo "")
+    RDMA_DEV=$(rdma link show 2>/dev/null | grep "$EXP_IFACE" | awk '{print $2}' | cut -d/ -f1 | head -1 || echo "")
     if [ -n "$RDMA_DEV" ]; then
         echo "  RDMA device for experiment network: $RDMA_DEV"
         echo "$RDMA_DEV" > /local/rdma_device.txt
@@ -117,7 +117,7 @@ if [ ! -d "dex" ]; then
     git clone https://github.com/mitchg10/dex.git
 fi
 cd dex
-./script/hugepage.sh 2>/dev/null || true
+sudo bash ./script/hugepage.sh 2>/dev/null || true
 
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
@@ -131,6 +131,7 @@ make -j$(nproc) 2>&1 | tail -5
 # bash /local/repository/scripts/gen_dex_restartMemc.sh restartMemc.sh # Fix DEX's restartMemc.sh
 cp ../script/restartMemc.sh . 2>/dev/null || true
 cp ../script/run*.sh . 2>/dev/null || true
+cp ../memcache.conf . 2>/dev/null || echo "  WARNING: Could not copy memcache.conf"
 
 echo "  DEX build: SUCCESS"
 
@@ -175,7 +176,7 @@ echo ""
 echo "Setup complete on $(hostname) at $(date)"
 echo "Experiment IP: ${EXP_IP:-UNKNOWN}"
 echo "RDMA device: ${RDMA_DEV:-UNKNOWN}"
-echo "Hugepages: $HP_TOTAL"
+# echo "Hugepages: $HP_TOTAL"
 echo "GCC: $(gcc --version | head -1)"
 echo "DEX: /mydata/dex/build/"
 # echo "  Sherman:        /mydata/Sherman/build/"
