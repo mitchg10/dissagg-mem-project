@@ -32,21 +32,6 @@ if ! gcc-13 --version &>/dev/null; then
 fi
 echo "  GCC version: $(gcc --version | head -1)"
 
-# echo "Configuring hugepages..."
-# sync
-# echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
-# echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
-# if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf; then
-#     echo "vm.nr_hugepages = 32768" | sudo tee -a /etc/sysctl.conf > /dev/null
-# fi
-# sudo sysctl -p > /dev/null 2>&1
-# HP_FREE=$(grep HugePages_Free /proc/meminfo | awk '{print $2}')
-# HP_TOTAL=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
-# echo "  Hugepages allocated: $HP_TOTAL (free: $HP_FREE)"
-# if [ "$HP_FREE" -lt 32768 ]; then
-#     echo "  WARNING: Only $HP_FREE hugepages free, need 32768 for 64GB DSM"
-# fi
-
 echo "Setting CPU governor to performance..."
 for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
     echo performance | sudo tee "$cpu" > /dev/null 2>&1 || true
@@ -70,8 +55,16 @@ done
 if [ -n "$EXP_IP" ]; then
     echo "  Experiment IP: $EXP_IP on interface $EXP_IFACE"
 
+    # Resolve parent physical interface if EXP_IFACE is a VLAN
+    # (rdma link show maps to physical interfaces, not VLAN sub-interfaces)
+    PHYS_IFACE="$EXP_IFACE"
+    if [ -f "/proc/net/vlan/$EXP_IFACE" ]; then
+        PHYS_IFACE=$(awk '/^Device:/{print $2}' /proc/net/vlan/"$EXP_IFACE")
+        echo "  VLAN interface $EXP_IFACE is on physical interface $PHYS_IFACE"
+    fi
+
     # Map netdev to RDMA device
-    RDMA_DEV=$(rdma link show 2>/dev/null | grep "$EXP_IFACE" | awk '{print $2}' | cut -d/ -f1 | head -1 || echo "")
+    RDMA_DEV=$(rdma link show 2>/dev/null | grep "$PHYS_IFACE" | awk '{print $2}' | cut -d/ -f1 | head -1 || echo "")
     if [ -n "$RDMA_DEV" ]; then
         echo "  RDMA device for experiment network: $RDMA_DEV"
         echo "$RDMA_DEV" > /local/rdma_device.txt
@@ -93,6 +86,10 @@ fi
 if [ -n "$EXP_IFACE" ]; then
     echo "  Setting jumbo frames on $EXP_IFACE..."
     sudo ip link set "$EXP_IFACE" mtu 9000 2>/dev/null || true
+    if [ "${PHYS_IFACE:-}" != "$EXP_IFACE" ]; then
+        echo "  Setting jumbo frames on physical interface $PHYS_IFACE..."
+        sudo ip link set "$PHYS_IFACE" mtu 9000 2>/dev/null || true
+    fi
 fi
 
 echo "Building DEX..."
@@ -121,53 +118,21 @@ sudo bash ./script/hugepage.sh 2>/dev/null || true
 
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
-make -j$(nproc) 2>&1 | tail -5
-
-# Re-assert hugepages because DEX build overrides
-# sync
-# echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
-# echo 32768 | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
-
-# bash /local/repository/scripts/gen_dex_restartMemc.sh restartMemc.sh # Fix DEX's restartMemc.sh
-cp ../script/restartMemc.sh . 2>/dev/null || true
-cp ../script/run*.sh . 2>/dev/null || true
-cp ../memcache.conf . 2>/dev/null || echo "  WARNING: Could not copy memcache.conf"
-
-echo "  DEX build: SUCCESS"
-
-# echo "Building Sherman..."
-# cd /mydata
-# if [ ! -d "Sherman" ]; then
-#     git clone https://github.com/thustorage/Sherman.git
-# fi
-# cd Sherman
-# mkdir -p build && cd build
-# cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
-# make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: Sherman build had issues"
-# echo "  Sherman build: ATTEMPTED"
-
-# echo "Building SMART..."
-# cd /mydata
-# if [ ! -d "SMART" ]; then
-#     git clone https://github.com/dmemsys/SMART.git
-# fi
-# cd SMART
-# # Install SMART dependencies
-# sh ./script/installMLNX.sh 2>/dev/null || echo "  WARNING: SMART dependency installation had issues"
-# mkdir -p build && cd build
-# cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -3
-# make -j$(nproc) 2>&1 | tail -5 || echo "  WARNING: SMART build had issues"
-# echo "  SMART build: ATTEMPTED"
+if make -j$(nproc) 2>&1 | tail -5; then
+    cp ../script/restartMemc.sh . 2>/dev/null || true
+    cp ../script/run*.sh . 2>/dev/null || true
+    cp ../memcache.conf . 2>/dev/null || echo "  WARNING: Could not copy memcache.conf"
+    echo "  DEX build: SUCCESS"
+else
+    echo "  DEX build: FAILED"
+    exit 1
+fi
 
 echo "Copying experiment scripts to /mydata/scripts/..."
 mkdir -p /mydata/scripts
 cp /local/repository/scripts/*.sh /mydata/scripts/ 2>/dev/null || true
 cp /local/repository/configs/* /mydata/configs/ 2>/dev/null || true
 chmod +x /mydata/scripts/*.sh 2>/dev/null || true
-
-# echo "Generating memcached.conf..."
-# mkdir -p /mydata/configs
-# printf '%s\n%s\n' "${EXP_IP:-10.10.1.1}" "11211" > /mydata/dex/build/memcached.conf
 
 pip3 install matplotlib pandas numpy --break-system-packages -q 2>/dev/null &
 
@@ -179,7 +144,5 @@ echo "RDMA device: ${RDMA_DEV:-UNKNOWN}"
 # echo "Hugepages: $HP_TOTAL"
 echo "GCC: $(gcc --version | head -1)"
 echo "DEX: /mydata/dex/build/"
-# echo "  Sherman:        /mydata/Sherman/build/"
-# echo "  SMART:          /mydata/SMART/build/"
 
 echo "DONE" > "$STATUS_FILE"
