@@ -47,6 +47,18 @@ LOG_FILE="${RESULTS_DIR}/orchestrator.log"
 # PIDs of background SSH sessions running memory-node newbench processes.
 MEMORY_PIDS=()
 
+# Globals set inside run_experiment() so the trap can clean up mid-run.
+_CLEANUP_PID=""
+_CLEANUP_KNODECOUNT=4
+
+_cleanup() {
+    log "Interrupt received — killing all nodes and exiting"
+    [[ -n "$_CLEANUP_PID" ]] && kill "$_CLEANUP_PID" 2>/dev/null || true
+    kill_memory_nodes "$_CLEANUP_KNODECOUNT"
+    exit 130
+}
+trap _cleanup SIGINT SIGTERM
+
 log() {
     echo "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
@@ -127,7 +139,9 @@ run_experiment() {
     log "  RUN: $tag"
     local start_time=$(date +%s)
 
-    local kNodeCount=2   # matches nodenum in run.sh (1 compute + 1 memory node)
+    # kNodeCount = all 4 nodes always; CNodeCount = ceil(totalThreads / kMaxThread).
+    # nodeIDs 0..CNodeCount-1 are CNodes; the rest are MNodes (set later after kMaxThread is known).
+    local kNodeCount=${#NODES[@]}
 
     # Restart memcached before each run (also kills any live memory-node newbench)
     restart_memcached "$kNodeCount"
@@ -197,7 +211,7 @@ run_experiment() {
 
         log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
 
-        # DEX benchmark parameters (mirroring script defaults where possible).
+        # DEX benchmark parameters (mirroring script defaults)
         local mem_threads=4         # mem_threads[1] in run.sh
         local cache_mb=256          # cache[3] in run.sh
         local bulk_million=50       # bulk in run.sh
@@ -214,6 +228,9 @@ run_experiment() {
 
         # Threads from orchestrator drive totalThreadCount.
         local total_threads="$threads"
+
+        # CNodeCount = ceil(totalThreads / kMaxThread); must pass correct kNodeCount to newbench.
+        local cnode_count=$(( (total_threads + kMaxThread - 1) / kMaxThread ))
 
         local cmd=(sudo ./newbench
             "$kNodeCount"
@@ -249,9 +266,15 @@ run_experiment() {
 
         start_memory_nodes "$kNodeCount" "${cmd[*]}"
 
+        # Expose PID/count to the trap so Ctrl+C cleans up mid-run.
+        _CLEANUP_PID=$node0_pid
+        _CLEANUP_KNODECOUNT=$kNodeCount
+
         # Wait for the compute-node benchmark to finish, then tear down servers.
         wait "$node0_pid"
         local bench_exit=$?
+        _CLEANUP_PID=""
+
         kill_memory_nodes "$kNodeCount"
     else
         # Non-DEX systems are not yet wired up; keep previous placeholder behavior.
