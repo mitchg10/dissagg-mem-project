@@ -26,6 +26,11 @@ RESULTS_DIR="${RESULTS_BASE}/${TIMESTAMP}"
 # Scaled:     2, 14, 28, 56, 84, 112
 THREAD_COUNTS=(2 14 28 56 84 112)
 
+# Maximum wall-clock seconds to allow a single benchmark run before killing it.
+# Prevents indefinite hangs when node-0 stalls at the DSM init barrier waiting
+# for memory nodes that never fully joined (SSH failure, OOM, etc.).
+EXP_TIMEOUT=${EXP_TIMEOUT:-300}
+
 # Workloads from Table 1
 WORKLOADS=("read-only" "read-intensive" "write-intensive" "insert-intensive" "scan-intensive")
 DISTRIBUTIONS=("zipfian" "uniform")
@@ -257,7 +262,7 @@ run_experiment() {
         # nodeIDs 1+.  Node-0 blocks at the DSM-init barrier until all
         # kNodeCount nodes have joined, then the experiment runs normally.
         log "  Running DEX benchmark command: ${cmd[*]}"
-        "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
+        timeout "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
         local node0_pid=$!
 
         # Give node-0 a moment to call serverEnter() and claim nodeID 0 before
@@ -273,6 +278,7 @@ run_experiment() {
         # Wait for the compute-node benchmark to finish, then tear down servers.
         wait "$node0_pid"
         local bench_exit=$?
+        [[ $bench_exit -eq 124 ]] && log "  WARNING: experiment timed out after ${EXP_TIMEOUT}s"
         _CLEANUP_PID=""
 
         kill_memory_nodes "$kNodeCount"
@@ -311,33 +317,6 @@ run_phase_a() {
         done
     done
     log "========== PHASE A COMPLETE =========="
-}
-
-# ============================================================
-# PHASE B: Baselines (Sherman, SMART) for Figures 6 & 7
-# ============================================================
-run_phase_b() {
-    log "========== PHASE B: Baselines (Sherman, SMART) =========="
-    for system in "sherman" "smart"; do
-        for dist in "${DISTRIBUTIONS[@]}"; do
-            for wl in "${WORKLOADS[@]}"; do
-                for tc in "${THREAD_COUNTS[@]}"; do
-                    run_experiment "$system" "$wl" "$dist" "$tc"
-                done
-            done
-        done
-    done
-    # P-Sherman and P-SMART (with logical partitioning)
-    for system in "p-sherman" "p-smart"; do
-        for dist in "${DISTRIBUTIONS[@]}"; do
-            for wl in "${WORKLOADS[@]}"; do
-                for tc in "${THREAD_COUNTS[@]}"; do
-                    run_experiment "$system" "$wl" "$dist" "$tc"
-                done
-            done
-        done
-    done
-    log "========== PHASE B COMPLETE =========="
 }
 
 # ============================================================
@@ -421,7 +400,6 @@ fi
 OVERALL_START=$(date +%s)
 
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "A" ]; then run_phase_a; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "B" ]; then run_phase_b; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_c; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_d; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_e; fi
