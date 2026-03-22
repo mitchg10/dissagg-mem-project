@@ -31,6 +31,14 @@ THREAD_COUNTS=(2 14 28 56 84 112)
 # for memory nodes that never fully joined (SSH failure, OOM, etc.).
 EXP_TIMEOUT=${EXP_TIMEOUT:-300}
 
+# Packets/sec cap applied to node-0 → memcached traffic while memory nodes are
+# performing their one-time serverEnter() INCR.  The tight serverConnect() busy-
+# wait loop can generate millions of GETs/s on a single keep-alive connection;
+# at that rate memcached's libevent loop falls behind on accept(), causing every
+# new TCP SYN from node-{1,2,3} to hit libmemcached's ~4 s connect timeout.
+# 1 000 pps is enough for the INCR itself but starves the GET flood.
+MEMC_THROTTLE_PPS=${MEMC_THROTTLE_PPS:-1000}
+
 # Workloads from Table 1
 WORKLOADS=("read-only" "read-intensive" "write-intensive" "insert-intensive" "scan-intensive")
 DISTRIBUTIONS=("zipfian" "uniform")
@@ -46,7 +54,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-mkdir -p "$RESULTS_DIR"
+mkdir -p "$RESULTS_DIR" || {
+    echo "ERROR: Cannot create results directory: $RESULTS_DIR"
+    echo "       Fix with: sudo mkdir -p $RESULTS_BASE && sudo chown \$(whoami) $RESULTS_BASE"
+    exit 1
+}
 LOG_FILE="${RESULTS_DIR}/orchestrator.log"
 
 # PIDs of background SSH sessions running memory-node newbench processes.
@@ -58,6 +70,7 @@ _CLEANUP_KNODECOUNT=4
 
 _cleanup() {
     log "Interrupt received — killing all nodes and exiting"
+    _throttle_stop        # always remove iptables rules before exiting
     [[ -n "$_CLEANUP_PID" ]] && kill "$_CLEANUP_PID" 2>/dev/null || true
     kill_memory_nodes "$_CLEANUP_KNODECOUNT"
     exit 130
@@ -66,6 +79,73 @@ trap _cleanup SIGINT SIGTERM
 
 log() {
     echo "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# Install an iptables rate-limit chain that caps outbound traffic from this node
+# to the memcached port.  Called after node-0 claims nodeID 0 and its
+# serverConnect() polling loop begins; removed once all nodes have registered.
+_throttle_start() {
+    # Create (or flush if leftover) a dedicated chain for this purpose.
+    sudo iptables -N MEMC_THROTTLE 2>/dev/null \
+        || sudo iptables -F MEMC_THROTTLE 2>/dev/null || true
+    # Allow up to MEMC_THROTTLE_PPS packets/s; drop the rest.
+    sudo iptables -A MEMC_THROTTLE \
+        -m limit --limit "${MEMC_THROTTLE_PPS}/sec" \
+        --limit-burst "${MEMC_THROTTLE_PPS}" -j ACCEPT 2>/dev/null || true
+    sudo iptables -A MEMC_THROTTLE -j DROP 2>/dev/null || true
+    # Redirect matching OUTPUT traffic into the chain.
+    if sudo iptables -I OUTPUT 1 \
+            -d "$MEMC_IP" -p tcp --dport "$MEMC_PORT" \
+            -j MEMC_THROTTLE 2>/dev/null; then
+        log "  Memcached throttle active (${MEMC_THROTTLE_PPS} pps cap on node-0 → memcached)"
+    else
+        log "  WARNING: could not install memcached throttle via iptables — memory nodes may time out"
+    fi
+}
+
+# Remove the rate-limit chain installed by _throttle_start.  Safe to call even
+# if _throttle_start was never invoked or partially failed.
+_throttle_stop() {
+    sudo iptables -D OUTPUT \
+        -d "$MEMC_IP" -p tcp --dport "$MEMC_PORT" \
+        -j MEMC_THROTTLE 2>/dev/null || true
+    sudo iptables -F MEMC_THROTTLE 2>/dev/null || true
+    sudo iptables -X MEMC_THROTTLE 2>/dev/null || true
+}
+
+# Poll memcached's serverNum key via the ASCII protocol until it reaches TARGET
+# (meaning that many nodes have called serverEnter()), or until TIMEOUT_SEC
+# seconds have elapsed.  Returns 0 on success, 1 on timeout.
+wait_servernum() {
+    local target="$1"
+    local timeout_sec="${2:-60}"
+    local elapsed=0
+    local memc_ip="$MEMC_IP"
+    local memc_port="$MEMC_PORT"
+    while (( elapsed < timeout_sec )); do
+        local val
+        val=$(python3 -c "
+import socket
+try:
+    s = socket.create_connection(('${memc_ip}', ${memc_port}), timeout=2)
+    s.sendall(b'get serverNum\r\n')
+    data = s.recv(512).decode('ascii', errors='replace')
+    s.close()
+    lines = data.splitlines()
+    for i, l in enumerate(lines):
+        if l.startswith('VALUE'):
+            print(lines[i + 1].strip())
+            break
+except Exception:
+    pass
+" 2>/dev/null) || val=""
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val >= target )); then
+            return 0
+        fi
+        sleep 1
+        (( elapsed += 1 ))
+    done
+    return 1
 }
 
 # Check if an experiment result already exists (for --resume)
@@ -139,7 +219,7 @@ run_experiment() {
     local exp_dir="${RESULTS_DIR}/${tag}"
     # Expose to start_memory_nodes() so it can direct remote output here.
     CURRENT_EXP_DIR="$exp_dir"
-    mkdir -p "$exp_dir"
+    mkdir -p "$exp_dir" || { log "ERROR: Cannot create experiment dir: $exp_dir"; return 1; }
 
     log "  RUN: $tag"
     local start_time=$(date +%s)
@@ -258,18 +338,38 @@ run_experiment() {
         } > "$exp_dir/output.log"
 
         # Launch node-0 (compute) first so it wins the memcached serverNum race
-        # and gets nodeID 0.  Memory nodes start 0.5s later via SSH and get
-        # nodeIDs 1+.  Node-0 blocks at the DSM-init barrier until all
-        # kNodeCount nodes have joined, then the experiment runs normally.
+        # and gets nodeID 0.  Memory nodes start only after node-0 has
+        # registered (serverNum == 1) to guarantee node-0 gets nodeID 0.
+        # Node-0 then blocks at the DSM-init barrier until all kNodeCount
+        # nodes have joined, then the experiment runs normally.
         log "  Running DEX benchmark command: ${cmd[*]}"
         timeout "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
         local node0_pid=$!
 
-        # Give node-0 a moment to call serverEnter() and claim nodeID 0 before
-        # the SSH-started memory nodes connect to memcached.
-        sleep 0.5
+        # Block until node-0's serverEnter() INCR has landed (serverNum >= 1).
+        # This replaces the previous blind sleep 0.5: it confirms nodeID 0 is
+        # claimed before we open the race to memory nodes.
+        if ! wait_servernum 1 15; then
+            log "  WARNING: node-0 did not register in memcached within 15s"
+        fi
+
+        # Now node-0 is inside serverConnect(), spinning with no sleep and
+        # sending millions of memcached_get("serverNum") calls/s.  This can
+        # fill memcached's accept backlog, causing every incoming TCP SYN from
+        # node-{1,2,3} to hit libmemcached's ~4 s connect timeout.
+        # Cap the GET flood for the brief window while memory nodes register.
+        _throttle_start
 
         start_memory_nodes "$kNodeCount" "${cmd[*]}"
+
+        # Wait until all kNodeCount nodes have registered, then lift the cap so
+        # the benchmark itself runs at full memcached bandwidth.
+        if wait_servernum "$kNodeCount" 60; then
+            log "  All $kNodeCount nodes registered in memcached"
+        else
+            log "  WARNING: not all nodes registered within 60s; continuing anyway"
+        fi
+        _throttle_stop
 
         # Expose PID/count to the trap so Ctrl+C cleans up mid-run.
         _CLEANUP_PID=$node0_pid
@@ -391,10 +491,15 @@ log "Results directory: $RESULTS_DIR"
 log "Phase filter: ${PHASE_FILTER:-ALL}"
 echo ""
 
-# Ensure memcached is running
+# Ensure memcached is running.
+# -t 8         : 8 worker threads (default 4) so the event loop can keep up
+#                with node-0's GET flood while also accepting new connections
+# -b 65536     : kernel listen backlog (default 1024); prevents SYN drops when
+#                the accept queue briefly fills under heavy load
+# -c 4096      : max simultaneous connections (default 1024)
 if ! ss -tlnp | grep -q ":11211"; then
     log "Starting memcached on $MEMC_IP..."
-    memcached -d -m 1024 -l "$MEMC_IP" -p "$MEMC_PORT"
+    memcached -d -m 1024 -l "$MEMC_IP" -p "$MEMC_PORT" -t 8 -b 65536 -c 4096
 fi
 
 OVERALL_START=$(date +%s)
