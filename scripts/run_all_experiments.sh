@@ -301,7 +301,7 @@ run_experiment() {
         # DEX benchmark parameters (mirroring script defaults)
         local mem_threads=4         # mem_threads[1] in run.sh
         local cache_mb=256          # cache[3] in run.sh
-        local bulk_million=50       # bulk in run.sh
+        local bulk_million=200      # bulk in run.sh (paper uses 200M records ≈ 3.2 GB)
         local warmup_million=10     # warmup in run.sh
         local op_million=50         # runnum in run.sh
         local check_correctness=0   # correct in run.sh
@@ -312,6 +312,17 @@ run_experiment() {
         local admission_rate=0.1    # admit in run.sh
         local auto_tune=0           # tune in run.sh
         local kMaxThread=36         # last argument in run.sh
+
+        # Allow Phase D extra tags to override cache_mb:
+        #   "cache64mb"  → cache_mb=64   (absolute MB, used by Figure 9 design sweep)
+        #   "cachepct8"  → cache_mb = bulk_million × 16 MB × 8 / 100  (% of dataset)
+        # With bulk_million=200 (3.2 GB dataset): cachepct1=32, cachepct8=256, cachepct32=1024, etc.
+        if [[ "$extra" =~ cache([0-9]+)mb ]]; then
+            cache_mb="${BASH_REMATCH[1]}"
+        elif [[ "$extra" =~ cachepct([0-9]+) ]]; then
+            local _pct="${BASH_REMATCH[1]}"
+            cache_mb=$(( bulk_million * 16 * _pct / 100 ))
+        fi
 
         # Threads from orchestrator drive totalThreadCount.
         local total_threads="$threads"
