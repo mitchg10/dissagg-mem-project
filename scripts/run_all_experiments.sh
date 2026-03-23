@@ -24,7 +24,7 @@ RESULTS_DIR="${RESULTS_BASE}/${TIMESTAMP}"
 # Thread counts adapted for d6515 (32 cores: 28 compute + 4 memory)
 # Paper uses: 2, 18, 36, 72, 108, 144
 # Scaled:     2, 14, 28, 56, 84, 112
-THREAD_COUNTS=(2 14 28 56 84 112)
+THREAD_COUNTS=(2 14 28 56 84)
 
 # Maximum wall-clock seconds to allow a single benchmark run before killing it.
 # Prevents indefinite hangs when node-0 stalls at the DSM init barrier waiting
@@ -480,15 +480,15 @@ run_phase_d() {
 
     # Figure 9: Cache design choices (200M dataset for meaningful cache-pressure comparison)
     for cache_mb in 64 256; do
-        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 112 "cache${cache_mb}mb_bulk200m"
-        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 112 "cache${cache_mb}mb_bulk200m"
-        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 112 "cache${cache_mb}mb_bulk200m"
+        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
+        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
+        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
     done
 
     # Figure 11: Cache size sensitivity (200M dataset; cachepct derives MB from bulk_million)
     for pct in 1 2 4 8 16 32 64; do
-        run_experiment "dex" "read-intensive" "zipfian" 112 "cachepct${pct}_bulk200m"
-        run_experiment "dex" "write-intensive" "zipfian" 112 "cachepct${pct}_bulk200m"
+        run_experiment "dex" "read-intensive" "zipfian" 84 "cachepct${pct}_bulk200m"
+        run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct${pct}_bulk200m"
     done
 
     log "========== PHASE D COMPLETE =========="
@@ -514,7 +514,7 @@ run_phase_e() {
 run_phase_f() {
     log "========== PHASE F: Repartitioning Cost (Figure 10) =========="
     for cache_mb in 256 512 1024; do
-        run_experiment "dex" "write-intensive" "zipfian" 112 "repart_cache${cache_mb}mb"
+        run_experiment "dex" "write-intensive" "zipfian" 84 "repart_cache${cache_mb}mb"
     done
     log "========== PHASE F COMPLETE =========="
 }
