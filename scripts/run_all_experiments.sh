@@ -30,6 +30,7 @@ THREAD_COUNTS=(2 14 28 56 84 112)
 # Prevents indefinite hangs when node-0 stalls at the DSM init barrier waiting
 # for memory nodes that never fully joined (SSH failure, OOM, etc.).
 EXP_TIMEOUT=${EXP_TIMEOUT:-300}
+MAX_RETRIES=${MAX_RETRIES:-3}
 
 # Packets/sec cap applied to node-0 → memcached traffic while memory nodes are
 # performing their one-time serverEnter() INCR.  The tight serverConnect() busy-
@@ -227,6 +228,7 @@ run_experiment() {
     # kNodeCount = all 4 nodes always; CNodeCount = ceil(totalThreads / kMaxThread).
     # nodeIDs 0..CNodeCount-1 are CNodes; the rest are MNodes (set later after kMaxThread is known).
     local kNodeCount=${#NODES[@]}
+    local bench_exit=0
 
     # Restart memcached before each run (also kills any live memory-node newbench)
     restart_memcached "$kNodeCount"
@@ -237,9 +239,9 @@ run_experiment() {
     # - We mirror DEX's own script arrays in `dex/script/run.sh` to define 5 workload
     #   types (indices into read/insert/update/delete/range arrays):
     #       0: read-only        -> 100% reads
-    #       1: read-intensive   -> 50% reads, 50% updates
-    #       2: write-intensive  -> 95% reads, 5% updates
-    #       3: insert-intensive -> 100% inserts
+    #       1: read-intensive   -> 95% reads, 5% updates
+    #       2: write-intensive  -> 50% reads, 50% updates
+    #       3: insert-intensive -> 50% inserts, 50% reads
     #       4: scan-intensive   -> 95% range, 5% inserts
     # - The original DEX paper only reports read-only and write-intensive results.
     #   This orchestrator intentionally extends to all five mixes for a richer study,
@@ -282,9 +284,9 @@ run_experiment() {
                 ;;
         esac
         # Operation mixes mirrored from dex/script/run.sh.
-        local read_arr=(100 50 95 0 0)
-        local insert_arr=(0 0 0 100 5)
-        local update_arr=(0 50 5 0 0)
+        local read_arr=(100 95 50 50 0)
+        local insert_arr=(0 0 0 50 5)
+        local update_arr=(0 5 50 0 0)
         local delete_arr=(0 0 0 0 0)
         local range_arr=(0 0 0 0 95)
 
@@ -337,51 +339,67 @@ run_experiment() {
             echo ""
         } > "$exp_dir/output.log"
 
-        # Launch node-0 (compute) first so it wins the memcached serverNum race
-        # and gets nodeID 0.  Memory nodes start only after node-0 has
-        # registered (serverNum == 1) to guarantee node-0 gets nodeID 0.
-        # Node-0 then blocks at the DSM-init barrier until all kNodeCount
-        # nodes have joined, then the experiment runs normally.
-        log "  Running DEX benchmark command: ${cmd[*]}"
-        timeout "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
-        local node0_pid=$!
+        local attempt
+        for (( attempt=1; attempt<=MAX_RETRIES; attempt++ )); do
+            if (( attempt > 1 )); then
+                log "  RETRY $attempt/$MAX_RETRIES for $tag"
+                restart_memcached "$kNodeCount"
+            fi
+            echo "=== ATTEMPT $attempt/$MAX_RETRIES ===" >> "$exp_dir/output.log"
 
-        # Block until node-0's serverEnter() INCR has landed (serverNum >= 1).
-        # This replaces the previous blind sleep 0.5: it confirms nodeID 0 is
-        # claimed before we open the race to memory nodes.
-        if ! wait_servernum 1 15; then
-            log "  WARNING: node-0 did not register in memcached within 15s"
-        fi
+            # Launch node-0 (compute) first so it wins the memcached serverNum race
+            # and gets nodeID 0.  Memory nodes start only after node-0 has
+            # registered (serverNum == 1) to guarantee node-0 gets nodeID 0.
+            # Node-0 then blocks at the DSM-init barrier until all kNodeCount
+            # nodes have joined, then the experiment runs normally.
+            log "  Running DEX benchmark command (attempt $attempt/$MAX_RETRIES): ${cmd[*]}"
+            timeout "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
+            local node0_pid=$!
 
-        # Now node-0 is inside serverConnect(), spinning with no sleep and
-        # sending millions of memcached_get("serverNum") calls/s.  This can
-        # fill memcached's accept backlog, causing every incoming TCP SYN from
-        # node-{1,2,3} to hit libmemcached's ~4 s connect timeout.
-        # Cap the GET flood for the brief window while memory nodes register.
-        _throttle_start
+            # Block until node-0's serverEnter() INCR has landed (serverNum >= 1).
+            # This replaces the previous blind sleep 0.5: it confirms nodeID 0 is
+            # claimed before we open the race to memory nodes.
+            if ! wait_servernum 1 15; then
+                log "  WARNING: node-0 did not register in memcached within 15s"
+            fi
 
-        start_memory_nodes "$kNodeCount" "${cmd[*]}"
+            # Now node-0 is inside serverConnect(), spinning with no sleep and
+            # sending millions of memcached_get("serverNum") calls/s.  This can
+            # fill memcached's accept backlog, causing every incoming TCP SYN from
+            # node-{1,2,3} to hit libmemcached's ~4 s connect timeout.
+            # Cap the GET flood for the brief window while memory nodes register.
+            _throttle_start
 
-        # Wait until all kNodeCount nodes have registered, then lift the cap so
-        # the benchmark itself runs at full memcached bandwidth.
-        if wait_servernum "$kNodeCount" 60; then
-            log "  All $kNodeCount nodes registered in memcached"
-        else
-            log "  WARNING: not all nodes registered within 60s; continuing anyway"
-        fi
-        _throttle_stop
+            start_memory_nodes "$kNodeCount" "${cmd[*]}"
 
-        # Expose PID/count to the trap so Ctrl+C cleans up mid-run.
-        _CLEANUP_PID=$node0_pid
-        _CLEANUP_KNODECOUNT=$kNodeCount
+            # Wait until all kNodeCount nodes have registered, then lift the cap so
+            # the benchmark itself runs at full memcached bandwidth.
+            if wait_servernum "$kNodeCount" 60; then
+                log "  All $kNodeCount nodes registered in memcached"
+            else
+                log "  WARNING: not all nodes registered within 60s; continuing anyway"
+            fi
+            _throttle_stop
 
-        # Wait for the compute-node benchmark to finish, then tear down servers.
-        wait "$node0_pid"
-        local bench_exit=$?
-        [[ $bench_exit -eq 124 ]] && log "  WARNING: experiment timed out after ${EXP_TIMEOUT}s"
-        _CLEANUP_PID=""
+            # Expose PID/count to the trap so Ctrl+C cleans up mid-run.
+            _CLEANUP_PID=$node0_pid
+            _CLEANUP_KNODECOUNT=$kNodeCount
 
-        kill_memory_nodes "$kNodeCount"
+            # Wait for the compute-node benchmark to finish, then tear down servers.
+            wait "$node0_pid"
+            bench_exit=$?
+            _CLEANUP_PID=""
+
+            kill_memory_nodes "$kNodeCount"
+
+            if [[ $bench_exit -eq 124 ]]; then
+                log "  WARNING: experiment timed out after ${EXP_TIMEOUT}s (attempt $attempt/$MAX_RETRIES)"
+                (( attempt < MAX_RETRIES )) && continue
+                log "  FAILED: all $MAX_RETRIES attempts timed out — $tag"
+            else
+                break
+            fi
+        done
     else
         # Non-DEX systems are not yet wired up; keep previous placeholder behavior.
         echo "PLACEHOLDER: Benchmark invocation for system '$system' not yet implemented." > "$exp_dir/output.log"
@@ -391,8 +409,12 @@ run_experiment() {
     local end_time=$(date +%s)
     local elapsed=$((end_time - start_time))
 
-    # Mark as done
-    echo "$tag completed in ${elapsed}s at $(date)" > "${exp_dir}/experiment_${tag}.done"
+    # Mark as done (skipped if all retries timed out, so --resume will retry it)
+    if [[ $bench_exit -ne 124 ]]; then
+        echo "$tag completed in ${elapsed}s at $(date)" > "${exp_dir}/experiment_${tag}.done"
+    else
+        log "  Skipping .done marker; experiment can be retried with --resume"
+    fi
 
     # Collect system stats from all nodes
     for node in "${NODES[@]}"; do
