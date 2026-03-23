@@ -301,7 +301,7 @@ run_experiment() {
         # DEX benchmark parameters (mirroring script defaults)
         local mem_threads=4         # mem_threads[1] in run.sh
         local cache_mb=256          # cache[3] in run.sh
-        local bulk_million=200      # bulk in run.sh (paper uses 200M records ≈ 3.2 GB)
+        local bulk_million=50       # bulk in run.sh (default; Phase D overrides to 200 via _bulk200m tag)
         local warmup_million=10     # warmup in run.sh
         local op_million=50         # runnum in run.sh
         local check_correctness=0   # correct in run.sh
@@ -313,10 +313,14 @@ run_experiment() {
         local auto_tune=0           # tune in run.sh
         local kMaxThread=36         # last argument in run.sh
 
-        # Allow Phase D extra tags to override cache_mb:
-        #   "cache64mb"  → cache_mb=64   (absolute MB, used by Figure 9 design sweep)
+        # Allow extra tags to override bulk dataset size and/or cache size:
+        #   "bulk200m"   → bulk_million=200  (Phase D: match paper's 3.2 GB dataset)
+        #   "cache64mb"  → cache_mb=64       (absolute MB, Figure 9 design sweep)
         #   "cachepct8"  → cache_mb = bulk_million × 16 MB × 8 / 100  (% of dataset)
-        # With bulk_million=200 (3.2 GB dataset): cachepct1=32, cachepct8=256, cachepct32=1024, etc.
+        # NOTE: bulk parse must precede cachepct so the formula uses the correct dataset size.
+        if [[ "$extra" =~ bulk([0-9]+)m ]]; then
+            bulk_million="${BASH_REMATCH[1]}"
+        fi
         if [[ "$extra" =~ cache([0-9]+)mb ]]; then
             cache_mb="${BASH_REMATCH[1]}"
         elif [[ "$extra" =~ cachepct([0-9]+) ]]; then
@@ -474,17 +478,17 @@ run_phase_c() {
 run_phase_d() {
     log "========== PHASE D: Cache Studies (Figures 9, 11) =========="
 
-    # Figure 9: Cache design choices
+    # Figure 9: Cache design choices (200M dataset for meaningful cache-pressure comparison)
     for cache_mb in 64 256; do
-        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 112 "cache${cache_mb}mb"
-        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 112 "cache${cache_mb}mb"
-        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 112 "cache${cache_mb}mb"
+        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 112 "cache${cache_mb}mb_bulk200m"
+        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 112 "cache${cache_mb}mb_bulk200m"
+        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 112 "cache${cache_mb}mb_bulk200m"
     done
 
-    # Figure 11: Cache size sensitivity
+    # Figure 11: Cache size sensitivity (200M dataset; cachepct derives MB from bulk_million)
     for pct in 1 2 4 8 16 32 64; do
-        run_experiment "dex" "read-intensive" "zipfian" 112 "cachepct${pct}"
-        run_experiment "dex" "write-intensive" "zipfian" 112 "cachepct${pct}"
+        run_experiment "dex" "read-intensive" "zipfian" 112 "cachepct${pct}_bulk200m"
+        run_experiment "dex" "write-intensive" "zipfian" 112 "cachepct${pct}_bulk200m"
     done
 
     log "========== PHASE D COMPLETE =========="
