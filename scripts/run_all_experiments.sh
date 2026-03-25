@@ -225,8 +225,8 @@ restart_memcached() {
     cd "$DEX_DIR"
     ./restartMemc.sh
     log "  Memcached restarted."
-    if ! wait_memcached_ready 15; then
-        log "  ERROR: memcached did not become ready within 15s — aborting run"
+    if ! wait_memcached_ready 60; then
+        log "  ERROR: memcached did not become ready within 60s — aborting run"
         return 1
     fi
     log "  Memcached accepting connections."
@@ -406,8 +406,12 @@ run_experiment() {
             # Block until node-0's serverEnter() INCR has landed (serverNum >= 1).
             # This replaces the previous blind sleep 0.5: it confirms nodeID 0 is
             # claimed before we open the race to memory nodes.
-            if ! wait_servernum 1 15; then
-                log "  WARNING: node-0 did not register in memcached within 15s"
+            if ! wait_servernum 1 60; then
+                log "  WARNING: node-0 did not register in memcached within 60s — aborting attempt $attempt/$MAX_RETRIES"
+                kill "$node0_pid" 2>/dev/null || true
+                wait "$node0_pid" 2>/dev/null || true
+                bench_exit=1
+                continue
             fi
 
             # Now node-0 is inside serverConnect(), spinning with no sleep and
