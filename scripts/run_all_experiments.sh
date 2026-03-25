@@ -29,7 +29,7 @@ THREAD_COUNTS=(2 14 28 56 84)
 # Maximum wall-clock seconds to allow a single benchmark run before killing it.
 # Prevents indefinite hangs when node-0 stalls at the DSM init barrier waiting
 # for memory nodes that never fully joined (SSH failure, OOM, etc.).
-EXP_TIMEOUT=${EXP_TIMEOUT:-300}
+EXP_TIMEOUT=${EXP_TIMEOUT:-450}
 MAX_RETRIES=${MAX_RETRIES:-3}
 
 # Packets/sec cap applied to node-0 → memcached traffic while memory nodes are
@@ -406,8 +406,8 @@ run_experiment() {
             # Block until node-0's serverEnter() INCR has landed (serverNum >= 1).
             # This replaces the previous blind sleep 0.5: it confirms nodeID 0 is
             # claimed before we open the race to memory nodes.
-            if ! wait_servernum 1 60; then
-                log "  WARNING: node-0 did not register in memcached within 60s — aborting attempt $attempt/$MAX_RETRIES"
+            if ! wait_servernum 1 15; then
+                log "  WARNING: node-0 did not register in memcached within 15s — aborting attempt $attempt/$MAX_RETRIES"
                 kill "$node0_pid" 2>/dev/null || true
                 wait "$node0_pid" 2>/dev/null || true
                 bench_exit=1
