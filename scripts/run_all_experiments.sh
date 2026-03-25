@@ -114,6 +114,33 @@ _throttle_stop() {
     sudo iptables -X MEMC_THROTTLE 2>/dev/null || true
 }
 
+# Poll memcached until it accepts a TCP connection and responds to the VERSION
+# command, or until TIMEOUT_SEC seconds elapse.  Returns 0 when ready, 1 on timeout.
+# Used after restart to confirm memcached is up before launching newbench.
+wait_memcached_ready() {
+    local timeout_sec="${1:-15}"
+    local elapsed=0
+    while (( elapsed < timeout_sec )); do
+        local reply
+        reply=$(python3 -c "
+import socket
+try:
+    s = socket.create_connection(('${MEMC_IP}', ${MEMC_PORT}), timeout=2)
+    s.sendall(b'version\r\n')
+    data = s.recv(64).decode('ascii', errors='replace')
+    s.close()
+    if data.startswith('VERSION'):
+        print('ok')
+except Exception:
+    pass
+" 2>/dev/null) || reply=""
+        [[ "$reply" == "ok" ]] && return 0
+        sleep 0.5
+        (( elapsed++ ))
+    done
+    return 1
+}
+
 # Poll memcached's serverNum key via the ASCII protocol until it reaches TARGET
 # (meaning that many nodes have called serverEnter()), or until TIMEOUT_SEC
 # seconds have elapsed.  Returns 0 on success, 1 on timeout.
@@ -198,6 +225,11 @@ restart_memcached() {
     cd "$DEX_DIR"
     ./restartMemc.sh
     log "  Memcached restarted."
+    if ! wait_memcached_ready 15; then
+        log "  ERROR: memcached did not become ready within 15s — aborting run"
+        return 1
+    fi
+    log "  Memcached accepting connections."
 }
 
 # Run a single experiment across all nodes
@@ -537,6 +569,10 @@ echo ""
 if ! ss -tlnp | grep -q ":11211"; then
     log "Starting memcached on $MEMC_IP..."
     memcached -d -m 1024 -l "$MEMC_IP" -p "$MEMC_PORT" -t 8 -b 65536 -c 4096
+    if ! wait_memcached_ready 15; then
+        log "ERROR: memcached failed to start"
+        exit 1
+    fi
 fi
 
 OVERALL_START=$(date +%s)
