@@ -424,7 +424,13 @@ run_experiment() {
             if wait_servernum "$kNodeCount" 60; then
                 log "  All $kNodeCount nodes registered in memcached"
             else
-                log "  WARNING: not all nodes registered within 60s; continuing anyway"
+                log "  WARNING: not all $kNodeCount nodes registered within 60s — aborting attempt $attempt/$MAX_RETRIES"
+                _throttle_stop
+                kill "$node0_pid" 2>/dev/null || true
+                wait "$node0_pid" 2>/dev/null || true
+                kill_memory_nodes "$kNodeCount"
+                bench_exit=1
+                continue
             fi
             _throttle_stop
 
