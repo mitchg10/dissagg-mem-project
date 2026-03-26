@@ -319,6 +319,10 @@ run_experiment() {
             local _pct="${BASH_REMATCH[1]}"
             cache_mb=$(( bulk_million * 16 * _pct / 100 ))
         fi
+        elif [[ "$extra" =~ memthreads([0-9]+) ]]; then
+            mem_threads="${BASH_REMATCH[1]}"
+        fi
+
 
         local total_threads="$threads"
         local cnode_count=$(( (total_threads + kMaxThread - 1) / kMaxThread ))
