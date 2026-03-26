@@ -3,15 +3,15 @@
 # Run on node-0 only. Coordinates all nodes via pdsh/ssh.
 #
 # Usage:
-#   bash run_all_experiments.sh              # Run everything
-#   bash run_all_experiments.sh --phase A    # Run only Phase A
-#   bash run_all_experiments.sh --resume     # Skip completed experiments
+#   bash run_all_experiments.sh # Run everything
+#   bash run_all_experiments.sh --phase A # Run only Phase A
+#   bash run_all_experiments.sh --resume # Skip completed experiments
 #
 # Results saved to: /mydata/results/<timestamp>/
 
 set -uo pipefail
 
-# ---- Configuration ----
+# Configuration
 NODES=("node-0" "node-1" "node-2" "node-3")
 IPS=("10.10.1.1" "10.10.1.2" "10.10.1.3" "10.10.1.4")
 MEMC_IP="10.10.1.1"
@@ -21,23 +21,11 @@ RESULTS_BASE="/mydata/results"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="${RESULTS_BASE}/${TIMESTAMP}"
 
-# Thread counts adapted for d6515 (32 cores: 28 compute + 4 memory)
 # Paper uses: 2, 18, 36, 72, 108, 144
-# Scaled:     2, 14, 28, 56, 84, 112
-THREAD_COUNTS=(2 14 28 56 84)
+THREAD_COUNTS=(2 14 28 56 84) # Adapted for d6515
 
-# Maximum wall-clock seconds to allow a single benchmark run before killing it.
-# Prevents indefinite hangs when node-0 stalls at the DSM init barrier waiting
-# for memory nodes that never fully joined (SSH failure, OOM, etc.).
 EXP_TIMEOUT=${EXP_TIMEOUT:-450}
 MAX_RETRIES=${MAX_RETRIES:-3}
-
-# Packets/sec cap applied to node-0 → memcached traffic while memory nodes are
-# performing their one-time serverEnter() INCR.  The tight serverConnect() busy-
-# wait loop can generate millions of GETs/s on a single keep-alive connection;
-# at that rate memcached's libevent loop falls behind on accept(), causing every
-# new TCP SYN from node-{1,2,3} to hit libmemcached's ~4 s connect timeout.
-# 1 000 pps is enough for the INCR itself but starves the GET flood.
 MEMC_THROTTLE_PPS=${MEMC_THROTTLE_PPS:-1000}
 
 # Workloads from Table 1
@@ -57,21 +45,22 @@ done
 
 mkdir -p "$RESULTS_DIR" || {
     echo "ERROR: Cannot create results directory: $RESULTS_DIR"
-    echo "       Fix with: sudo mkdir -p $RESULTS_BASE && sudo chown \$(whoami) $RESULTS_BASE"
+    echo "-> Fix with: sudo mkdir -p $RESULTS_BASE && sudo chown \$(whoami) $RESULTS_BASE"
     exit 1
 }
 LOG_FILE="${RESULTS_DIR}/orchestrator.log"
 
-# PIDs of background SSH sessions running memory-node newbench processes.
+# PIDs of background SSH sessions
 MEMORY_PIDS=()
 
-# Globals set inside run_experiment() so the trap can clean up mid-run.
+# Globals set inside run_experiment()
 _CLEANUP_PID=""
 _CLEANUP_KNODECOUNT=4
 
+# Trap to clean up on interrupt 
 _cleanup() {
     log "Interrupt received — killing all nodes and exiting"
-    _throttle_stop        # always remove iptables rules before exiting
+    _throttle_stop
     [[ -n "$_CLEANUP_PID" ]] && kill "$_CLEANUP_PID" 2>/dev/null || true
     kill_memory_nodes "$_CLEANUP_KNODECOUNT"
     exit 130
@@ -82,30 +71,27 @@ log() {
     echo "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# Install an iptables rate-limit chain that caps outbound traffic from this node
-# to the memcached port.  Called after node-0 claims nodeID 0 and its
-# serverConnect() polling loop begins; removed once all nodes have registered.
+# Install an iptables rate-limit chain that caps outbound traffic from node-0
 _throttle_start() {
-    # Create (or flush if leftover) a dedicated chain for this purpose.
+    # Create or flush the MEMC_THROTTLE chain 
     sudo iptables -N MEMC_THROTTLE 2>/dev/null \
         || sudo iptables -F MEMC_THROTTLE 2>/dev/null || true
-    # Allow up to MEMC_THROTTLE_PPS packets/s; drop the rest.
+    # Allow up to MEMC_THROTTLE_PPS packets/s; drop the rest
     sudo iptables -A MEMC_THROTTLE \
         -m limit --limit "${MEMC_THROTTLE_PPS}/sec" \
         --limit-burst "${MEMC_THROTTLE_PPS}" -j ACCEPT 2>/dev/null || true
     sudo iptables -A MEMC_THROTTLE -j DROP 2>/dev/null || true
-    # Redirect matching OUTPUT traffic into the chain.
+    # Redirect matching OUTPUT traffic into the chain
     if sudo iptables -I OUTPUT 1 \
             -d "$MEMC_IP" -p tcp --dport "$MEMC_PORT" \
             -j MEMC_THROTTLE 2>/dev/null; then
-        log "  Memcached throttle active (${MEMC_THROTTLE_PPS} pps cap on node-0 → memcached)"
+        log "  Memcached throttle active (${MEMC_THROTTLE_PPS} pps cap on node-0 -> memcached)"
     else
         log "  WARNING: could not install memcached throttle via iptables — memory nodes may time out"
     fi
 }
 
-# Remove the rate-limit chain installed by _throttle_start.  Safe to call even
-# if _throttle_start was never invoked or partially failed.
+# Remove the rate-limit chain installed by _throttle_start
 _throttle_stop() {
     sudo iptables -D OUTPUT \
         -d "$MEMC_IP" -p tcp --dport "$MEMC_PORT" \
@@ -141,9 +127,7 @@ except Exception:
     return 1
 }
 
-# Poll memcached's serverNum key via the ASCII protocol until it reaches TARGET
-# (meaning that many nodes have called serverEnter()), or until TIMEOUT_SEC
-# seconds have elapsed.  Returns 0 on success, 1 on timeout.
+# Poll memcached's serverNum key until it reaches TARGET. Returns 0 on success, 1 on timeout
 wait_servernum() {
     local target="$1"
     local timeout_sec="${2:-60}"
@@ -182,7 +166,7 @@ result_exists() {
     ls "${RESULTS_BASE}"/*/experiment_${tag}.done 2>/dev/null | head -1
 }
 
-# Kill newbench on memory nodes (nodes 1..kNodeCount-1) via SSH.
+# Kill newbench on memory nodes (nodes 1..kNodeCount-1) via SSH
 kill_memory_nodes() {
     local kNodeCount="$1"
     for (( i=1; i<kNodeCount; i++ )); do
@@ -191,15 +175,14 @@ kill_memory_nodes() {
         ssh -o StrictHostKeyChecking=no "$node" \
             "sudo pkill -9 newbench 2>/dev/null || true" || true
     done
-    # Also reap any lingering background SSH PIDs from the previous run.
+    # Also any lingering background SSH PIDs from the previous run
     for pid in "${MEMORY_PIDS[@]}"; do
         wait "$pid" 2>/dev/null || true
     done
     MEMORY_PIDS=()
 }
 
-# Start newbench on memory nodes in the background via SSH.
-# All nodes run the identical binary+args; role is assigned by memcached counter order.
+# Start newbench on memory nodes in the background via SSH
 start_memory_nodes() {
     local kNodeCount="$1"
     shift
@@ -208,15 +191,14 @@ start_memory_nodes() {
     for (( i=1; i<kNodeCount; i++ )); do
         local node="${NODES[$i]}"
         log "  Starting memory server on $node..."
-        # Redirect output to the same results dir so it is captured alongside node-0.
+        # Redirect output to the same results dir so it is captured alongside node-0
         ssh -o StrictHostKeyChecking=no "$node" \
             "cd $DEX_DIR && $mem_cmd" >> "${CURRENT_EXP_DIR}/${node}_output.log" 2>&1 &
         MEMORY_PIDS+=($!)
     done
 }
 
-# Restart memcached state (clears QP info between runs).
-# Also kills any live memory-node newbench processes first.
+# Restart memcached state
 restart_memcached() {
     local kNodeCount="$1"
     kill_memory_nodes "$kNodeCount"
@@ -232,8 +214,7 @@ restart_memcached() {
     log "  Memcached accepting connections."
 }
 
-# Run a single experiment across all nodes
-# Args: system workload distribution threads [extra_args]
+# Run an experiment
 run_experiment() {
     local system="$1"
     local workload="$2"
@@ -243,48 +224,30 @@ run_experiment() {
     local tag="${system}_${workload}_${dist}_${threads}t${extra:+_$extra}"
     log "Starting experiment: $tag"
 
-    # Resume support
+    # Resume if applicable - not fully implemented yet
     if $RESUME && result_exists "$tag" >/dev/null 2>&1; then
         log "  SKIP (already done): $tag"
         return 0
     fi
 
     local exp_dir="${RESULTS_DIR}/${tag}"
-    # Expose to start_memory_nodes() so it can direct remote output here.
     CURRENT_EXP_DIR="$exp_dir"
     mkdir -p "$exp_dir" || { log "ERROR: Cannot create experiment dir: $exp_dir"; return 1; }
 
     log "  RUN: $tag"
     local start_time=$(date +%s)
 
-    # kNodeCount = all 4 nodes always; CNodeCount = ceil(totalThreads / kMaxThread).
-    # nodeIDs 0..CNodeCount-1 are CNodes; the rest are MNodes (set later after kMaxThread is known).
     local kNodeCount=${#NODES[@]}
     local bench_exit=0
 
-    # Restart memcached before each run (also kills any live memory-node newbench)
+    # Restart before experiment
     restart_memcached "$kNodeCount"
 
     cd "$DEX_DIR"
 
-    # DEX invocation policy:
-    # - We mirror DEX's own script arrays in `dex/script/run.sh` to define 5 workload
-    #   types (indices into read/insert/update/delete/range arrays):
-    #       0: read-only        -> 100% reads
-    #       1: read-intensive   -> 95% reads, 5% updates
-    #       2: write-intensive  -> 50% reads, 50% updates
-    #       3: insert-intensive -> 50% inserts, 50% reads
-    #       4: scan-intensive   -> 95% range, 5% inserts
-    # - The original DEX paper only reports read-only and write-intensive results.
-    #   This orchestrator intentionally extends to all five mixes for a richer study,
-    #   using the authors' configuration as the source of truth.
-    #
-    # Currently, we directly invoke DEX's `newbench` binary on this node for any
-    # system tag that starts with "dex". Baseline systems (Sherman, SMART, etc.)
-    # are left for future integration.
-
+    # Invoke DEX binary
     if [[ "$system" == dex* ]]; then
-        # Map high-level workload name to op-index used by DEX scripts.
+        # Map high-level workload name to op-index
         local op_index
         case "$workload" in
             "read-only")       op_index=0 ;;
@@ -299,7 +262,7 @@ run_experiment() {
         esac
         log "  Mapped workload '$workload' to DEX op_index=$op_index"
 
-        # Map distribution to DEX's uniform/zipf knobs.
+        # Map distribution to DEX's uniform/zipf
         local uniform_flag zipf_theta
         case "$dist" in
             "zipfian")
@@ -315,7 +278,8 @@ run_experiment() {
                 return 1
                 ;;
         esac
-        # Operation mixes mirrored from dex/script/run.sh.
+
+        # Operation mixes mirrored from DEX's run.sh
         local read_arr=(100 95 50 50 0)
         local insert_arr=(0 0 0 50 5)
         local update_arr=(0 5 50 0 0)
@@ -330,26 +294,22 @@ run_experiment() {
 
         log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
 
-        # DEX benchmark parameters (mirroring script defaults)
-        local mem_threads=4         # mem_threads[1] in run.sh
-        local cache_mb=256          # cache[3] in run.sh
-        local bulk_million=50       # bulk in run.sh (default; Phase D overrides to 200 via _bulk200m tag)
-        local warmup_million=10     # warmup in run.sh
-        local op_million=50         # runnum in run.sh
-        local check_correctness=0   # correct in run.sh
-        local time_based=1          # timebase in run.sh
-        local early_stop=1          # early in run.sh
-        local index_type=0          # 0=DEX, 1=Sherman, 2=SMART
-        local rpc_rate=1            # rpc in run.sh
-        local admission_rate=0.1    # admit in run.sh
-        local auto_tune=0           # tune in run.sh
-        local kMaxThread=36         # last argument in run.sh
+        # DEX benchmark parameters which mirror defaults again
+        local mem_threads=4 
+        local cache_mb=256 
+        local bulk_million=50 
+        local warmup_million=10     
+        local op_million=50         
+        local check_correctness=0   
+        local time_based=1          
+        local early_stop=1          
+        local index_type=0          
+        local rpc_rate=1            
+        local admission_rate=0.1    
+        local auto_tune=0           
+        local kMaxThread=36
 
-        # Allow extra tags to override bulk dataset size and/or cache size:
-        #   "bulk200m"   → bulk_million=200  (Phase D: match paper's 3.2 GB dataset)
-        #   "cache64mb"  → cache_mb=64       (absolute MB, Figure 9 design sweep)
-        #   "cachepct8"  → cache_mb = bulk_million × 16 MB × 8 / 100  (% of dataset)
-        # NOTE: bulk parse must precede cachepct so the formula uses the correct dataset size.
+        # Allow extra tags to override bulk dataset size and/or cache size
         if [[ "$extra" =~ bulk([0-9]+)m ]]; then
             bulk_million="${BASH_REMATCH[1]}"
         fi
@@ -360,10 +320,7 @@ run_experiment() {
             cache_mb=$(( bulk_million * 16 * _pct / 100 ))
         fi
 
-        # Threads from orchestrator drive totalThreadCount.
         local total_threads="$threads"
-
-        # CNodeCount = ceil(totalThreads / kMaxThread); must pass correct kNodeCount to newbench.
         local cnode_count=$(( (total_threads + kMaxThread - 1) / kMaxThread ))
 
         local cmd=(sudo ./newbench
@@ -395,17 +352,11 @@ run_experiment() {
             echo "=== ATTEMPT $attempt/$MAX_RETRIES ===" >> "$exp_dir/output.log"
 
             # Launch node-0 (compute) first so it wins the memcached serverNum race
-            # and gets nodeID 0.  Memory nodes start only after node-0 has
-            # registered (serverNum == 1) to guarantee node-0 gets nodeID 0.
-            # Node-0 then blocks at the DSM-init barrier until all kNodeCount
-            # nodes have joined, then the experiment runs normally.
             log "  Running DEX benchmark command (attempt $attempt/$MAX_RETRIES): ${cmd[*]}"
             timeout "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
             local node0_pid=$!
 
-            # Block until node-0's serverEnter() INCR has landed (serverNum >= 1).
-            # This replaces the previous blind sleep 0.5: it confirms nodeID 0 is
-            # claimed before we open the race to memory nodes.
+            # Block until node-0 serverEnter()
             if ! wait_servernum 1 15; then
                 log "  WARNING: node-0 did not register in memcached within 15s — aborting attempt $attempt/$MAX_RETRIES"
                 kill "$node0_pid" 2>/dev/null || true
@@ -414,17 +365,12 @@ run_experiment() {
                 continue
             fi
 
-            # Now node-0 is inside serverConnect(), spinning with no sleep and
-            # sending millions of memcached_get("serverNum") calls/s.  This can
-            # fill memcached's accept backlog, causing every incoming TCP SYN from
-            # node-{1,2,3} to hit libmemcached's ~4 s connect timeout.
-            # Cap the GET flood for the brief window while memory nodes register.
+            # Now node-0 is inside serverConnect(), launch other nodes and apply cap
             _throttle_start
 
             start_memory_nodes "$kNodeCount" "${cmd[*]}"
 
-            # Wait until all kNodeCount nodes have registered, then lift the cap so
-            # the benchmark itself runs at full memcached bandwidth.
+            # Wait until all kNodeCount nodes have registered, then lift the cap
             if wait_servernum "$kNodeCount" 60; then
                 log "  All $kNodeCount nodes registered in memcached"
             else
@@ -438,11 +384,11 @@ run_experiment() {
             fi
             _throttle_stop
 
-            # Expose PID/count to the trap so Ctrl+C cleans up mid-run.
+            # Expose PID/count to the trap so Ctrl+C cleans up mid-run
             _CLEANUP_PID=$node0_pid
             _CLEANUP_KNODECOUNT=$kNodeCount
 
-            # Wait for the compute-node benchmark to finish, then tear down servers.
+            # Wait for the compute-node benchmark to finish then clean up
             wait "$node0_pid"
             bench_exit=$?
             _CLEANUP_PID=""
@@ -458,15 +404,14 @@ run_experiment() {
             fi
         done
     else
-        # Non-DEX systems are not yet wired up; keep previous placeholder behavior.
-        echo "PLACEHOLDER: Benchmark invocation for system '$system' not yet implemented." > "$exp_dir/output.log"
+        # Temporary thinking I had to implement Sherman and SMART too
         echo "System: $system, Workload: $workload, Distribution: $dist, Threads: $threads" >> "$exp_dir/output.log"
     fi
 
     local end_time=$(date +%s)
     local elapsed=$((end_time - start_time))
 
-    # Mark as done (skipped if all retries timed out, so --resume will retry it)
+    # Mark experiment done
     if [[ $bench_exit -ne 124 ]]; then
         echo "$tag completed in ${elapsed}s at $(date)" > "${exp_dir}/experiment_${tag}.done"
     else
@@ -483,9 +428,6 @@ run_experiment() {
     log "  DONE: $tag (${elapsed}s)"
 }
 
-# ============================================================
-# PHASE A: DEX Scalability (Figures 6 & 7) — HIGHEST PRIORITY
-# ============================================================
 run_phase_a() {
     log "========== PHASE A: DEX Scalability (Figures 6 & 7) =========="
     for dist in "${DISTRIBUTIONS[@]}"; do
@@ -498,11 +440,8 @@ run_phase_a() {
     log "========== PHASE A COMPLETE =========="
 }
 
-# ============================================================
-# PHASE C: Ablation Study (Figure 8)
-# ============================================================
-run_phase_c() {
-    log "========== PHASE C: Ablation Study (Figure 8) =========="
+run_phase_b() {
+    log "========== PHASE B: Ablation Study (Figure 8) =========="
     for dist in "zipfian" "uniform"; do
         for tc in "${THREAD_COUNTS[@]}"; do
             run_experiment "dex-onesided"     "write-intensive" "$dist" "$tc" "ablation"
@@ -511,16 +450,13 @@ run_phase_c() {
             run_experiment "dex-full"          "write-intensive" "$dist" "$tc" "ablation"
         done
     done
-    log "========== PHASE C COMPLETE =========="
+    log "========== PHASE B COMPLETE =========="
 }
 
-# ============================================================
-# PHASE D: Cache Design + Size Sensitivity (Figures 9, 11)
-# ============================================================
-run_phase_d() {
-    log "========== PHASE D: Cache Studies (Figures 9, 11) =========="
+run_phase_c() {
+    log "========== PHASE C: Cache Studies (Figures 9, 11) =========="
 
-    # Figure 9: Cache design choices (200M dataset for meaningful cache-pressure comparison)
+    # Figure 9: Cache design choices (200M dataset for meaningful comparison)
     for cache_mb in 64 256; do
         run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
         run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
@@ -533,49 +469,35 @@ run_phase_d() {
         run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct${pct}_bulk200m"
     done
 
-    log "========== PHASE D COMPLETE =========="
+    log "========== PHASE C COMPLETE =========="
 }
 
-# ============================================================
-# PHASE E: Offloading Sensitivity (Figure 12)
-# ============================================================
-run_phase_e() {
-    log "========== PHASE E: Offloading Sensitivity (Figure 12) =========="
+run_phase_d() {
+    log "========== PHASE D: Offloading Sensitivity (Figure 12) =========="
     for mem_threads in 0 1 2 4; do
         for tc in "${THREAD_COUNTS[@]}"; do
             run_experiment "dex" "read-intensive" "zipfian" "$tc" "memthreads${mem_threads}"
             run_experiment "dex" "write-intensive" "zipfian" "$tc" "memthreads${mem_threads}"
         done
     done
-    log "========== PHASE E COMPLETE =========="
+    log "========== PHASE D COMPLETE =========="
 }
 
-# ============================================================
-# PHASE F: Repartitioning Cost (Figure 10)
-# ============================================================
-run_phase_f() {
-    log "========== PHASE F: Repartitioning Cost (Figure 10) =========="
+run_phase_e() {
+    log "========== PHASE E: Repartitioning Cost (Figure 10) =========="
     for cache_mb in 256 512 1024; do
         run_experiment "dex" "write-intensive" "zipfian" 84 "repart_cache${cache_mb}mb"
     done
-    log "========== PHASE F COMPLETE =========="
+    log "========== PHASE E COMPLETE =========="
 }
 
-# ============================================================
-# Main Execution
-# ============================================================
-
+# MAIN
 log "DEX Experiment Suite starting at $(date)"
 log "Results directory: $RESULTS_DIR"
 log "Phase filter: ${PHASE_FILTER:-ALL}"
 echo ""
 
-# Ensure memcached is running.
-# -t 8         : 8 worker threads (default 4) so the event loop can keep up
-#                with node-0's GET flood while also accepting new connections
-# -b 65536     : kernel listen backlog (default 1024); prevents SYN drops when
-#                the accept queue briefly fills under heavy load
-# -c 4096      : max simultaneous connections (default 1024)
+# Ensure memcached is running
 if ! ss -tlnp | grep -q ":11211"; then
     log "Starting memcached on $MEMC_IP..."
     memcached -d -m 1024 -l "$MEMC_IP" -p "$MEMC_PORT" -t 8 -b 65536 -c 4096
@@ -603,4 +525,3 @@ log "Total time: ${OVERALL_ELAPSED} minutes"
 log "Results in: $RESULTS_DIR"
 log "============================================="
 log ""
-log "NEXT: Run backup_results.sh to copy results off-cluster!"
