@@ -513,10 +513,10 @@ fi
 OVERALL_START=$(date +%s)
 
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "A" ]; then run_phase_a; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_b; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_c; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_d; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "F" ]; then run_phase_e; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "B" ]; then run_phase_b; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_c; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_d; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_e; fi
 
 OVERALL_END=$(date +%s)
 OVERALL_ELAPSED=$(( (OVERALL_END - OVERALL_START) / 60 ))
