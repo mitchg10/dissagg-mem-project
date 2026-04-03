@@ -318,7 +318,6 @@ run_experiment() {
         elif [[ "$extra" =~ cachepct([0-9]+) ]]; then
             local _pct="${BASH_REMATCH[1]}"
             cache_mb=$(( bulk_million * 16 * _pct / 100 ))
-        fi
         elif [[ "$extra" =~ memthreads([0-9]+) ]]; then
             mem_threads="${BASH_REMATCH[1]}"
         fi
@@ -514,10 +513,10 @@ fi
 OVERALL_START=$(date +%s)
 
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "A" ]; then run_phase_a; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_c; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_d; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_e; fi
-if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "F" ]; then run_phase_f; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_b; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_c; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_d; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "F" ]; then run_phase_e; fi
 
 OVERALL_END=$(date +%s)
 OVERALL_ELAPSED=$(( (OVERALL_END - OVERALL_START) / 60 ))
