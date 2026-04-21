@@ -332,6 +332,11 @@ run_experiment() {
         if [[ "$extra" =~ memthreads([0-9]+) ]]; then
             mem_threads="${BASH_REMATCH[1]}"
         fi
+        # Phase E: repartitioning cost experiment — keep threads alive through recovery
+        if [[ "$extra" =~ repart ]]; then
+            early_stop=0
+            op_million=500
+        fi
 
 
         local total_threads="$threads"

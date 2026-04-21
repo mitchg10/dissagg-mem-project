@@ -238,7 +238,7 @@ def scan_results(results_dir):
             meta['phase'] = phase_letter
             log_path = os.path.join(exp_dir, "output.log")
             metrics = extract_metrics(log_path)
-            rows.append({**meta, **metrics, 'dir': dirname})
+            rows.append({**meta, **metrics, 'dir': dirname, 'path': exp_dir})
 
     return rows
 
@@ -246,6 +246,18 @@ def scan_results(results_dir):
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
+
+def _parse_cluster_timeseries(log_path):
+    """Return list of floats from 'cluster throughput X.XX' lines (one per second)."""
+    series = []
+    if not os.path.exists(log_path):
+        return series
+    with open(log_path) as f:
+        for line in f:
+            m = re.match(r'cluster throughput\s+(\d+\.?\d*)', line)
+            if m:
+                series.append(float(m.group(1)))
+    return series
 
 _ABLATION_ORDER = ['dex-onesided', 'dex-partitioning', 'dex-cache', 'dex-full']
 _ABLATION_LABELS = {
@@ -511,6 +523,70 @@ def plot_phase_D(rows, out_dir):
     print(f"  Saved: {out_path}")
 
 
+def plot_phase_E(rows, out_dir):
+    """Reproduce Figure 10: throughput during logical repartitioning."""
+    import matplotlib.pyplot as plt
+
+    def _cache_mb(extra):
+        m = re.search(r'cache(\d+)mb', extra)
+        return int(m.group(1)) if m else None
+
+    data = sorted(
+        [r for r in rows
+         if r['phase'] == 'E'
+         and r['system'] == 'dex'
+         and _cache_mb(r.get('extra', '')) is not None],
+        key=lambda r: _cache_mb(r['extra']) or 0,
+    )
+    if not data:
+        print("  [warn] No Phase E data found for Figure 10.")
+        return
+
+    colors  = ['#4878d0', '#ee854a', '#6acc65']
+    markers = ['o', '^', 's']
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    for row, color, marker in zip(data, colors, markers):
+        cache_mb = _cache_mb(row['extra'])
+        log_path = os.path.join(row['path'], 'output.log')
+        ys = _parse_cluster_timeseries(log_path)
+        if not ys:
+            print(f"  [warn] No time-series data in {log_path}")
+            continue
+        xs = list(range(1, len(ys) + 1))
+        ax.plot(xs, ys, marker=marker, color=color,
+                linewidth=1.8, markersize=6, label=f'{cache_mb} MB')
+
+        # Shade the repartitioning region (contiguous zeros after first non-zero)
+        in_repart = False
+        repart_start = repart_end = None
+        for i, y in enumerate(ys):
+            if not in_repart and y == 0.0:
+                in_repart = True
+                repart_start = xs[i] - 0.5
+            elif in_repart and y != 0.0:
+                repart_end = xs[i] - 0.5
+                break
+        if repart_start is not None and repart_end is None:
+            repart_end = xs[-1] + 0.5
+        if repart_start is not None and repart_end is not None:
+            ax.axvspan(repart_start, repart_end, alpha=0.08, color=color)
+
+    ax.axvline(x=2, color='darkorange', linestyle='--', linewidth=1.2,
+               label='Repartitioning start (t=2s)')
+    ax.set_xlabel('Seconds')
+    ax.set_ylabel('Million ops/second')
+    ax.set_title('Fig. 10 Reproduction — Throughput During Repartitioning\n'
+                 '(Write-Intensive, Zipfian, 84 threads)')
+    ax.legend(fontsize=8)
+    ax.grid(True, linestyle='--', alpha=0.4)
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, 'fig_E_fig10_repartitioning.pdf')
+    fig.savefig(out_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
 def plot_figures(rows, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     print(f"\nGenerating figures in: {out_dir}")
@@ -518,6 +594,7 @@ def plot_figures(rows, out_dir):
     plot_phase_C_fig9(rows, out_dir)
     plot_phase_C_fig11(rows, out_dir)
     plot_phase_D(rows, out_dir)
+    plot_phase_E(rows, out_dir)
 
 
 # ---------------------------------------------------------------------------
