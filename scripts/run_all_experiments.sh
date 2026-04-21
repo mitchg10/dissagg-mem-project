@@ -337,6 +337,11 @@ run_experiment() {
             early_stop=0
             op_million=500
         fi
+        # Per-experiment timeout override (e.g. extra=…_timeout1200s); large bulk loads need more time
+        local exp_timeout="$EXP_TIMEOUT"
+        if [[ "$extra" =~ timeout([0-9]+)s ]]; then
+            exp_timeout="${BASH_REMATCH[1]}"
+        fi
 
 
         local total_threads="$threads"
@@ -372,7 +377,7 @@ run_experiment() {
 
             # Launch node-0 (compute) first so it wins the memcached serverNum race
             log "  Running DEX benchmark command (attempt $attempt/$MAX_RETRIES): ${cmd[*]}"
-            timeout --kill-after=30s "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
+            timeout --kill-after=30s "$exp_timeout" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
             local node0_pid=$!
 
             # Block until node-0 serverEnter()
@@ -484,16 +489,17 @@ run_phase_c() {
     log "========== PHASE C: Cache Studies (Figures 9, 11) =========="
 
     # Figure 9: Cache design choices (200M dataset for meaningful comparison)
+    # timeout1200s: 200M bulk load takes ~7 min over RDMA; 1200s gives headroom for load+warmup+measurement
     for cache_mb in 64 256; do
-        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
-        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
-        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m"
+        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout1200s"
+        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout1200s"
+        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout1200s"
     done
 
     # Figure 11: Cache size sensitivity (200M dataset; cachepct derives MB from bulk_million)
     for pct in 1 2 4 8 16 32 64; do
-        run_experiment "dex" "read-intensive" "zipfian" 84 "cachepct${pct}_bulk200m"
-        run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct${pct}_bulk200m"
+        run_experiment "dex" "read-intensive" "zipfian" 84 "cachepct${pct}_bulk200m_timeout1200s"
+        run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct${pct}_bulk200m_timeout1200s"
     done
 
     log "========== PHASE C COMPLETE =========="
