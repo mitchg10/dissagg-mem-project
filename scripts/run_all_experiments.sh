@@ -519,8 +519,9 @@ run_phase_d() {
 
 run_phase_e() {
     log "========== PHASE E: Repartitioning Cost (Figure 10) =========="
+    # timeout1800s: repart sets op_million=500; need headroom beyond the 450s default
     for cache_mb in 256 512 1024; do
-        run_experiment "dex" "write-intensive" "zipfian" 84 "repart_cache${cache_mb}mb"
+        run_experiment "dex" "write-intensive" "zipfian" 84 "repart_cache${cache_mb}mb_timeout1800s"
     done
     log "========== PHASE E COMPLETE =========="
 }
