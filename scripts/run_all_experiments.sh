@@ -372,7 +372,7 @@ run_experiment() {
 
             # Launch node-0 (compute) first so it wins the memcached serverNum race
             log "  Running DEX benchmark command (attempt $attempt/$MAX_RETRIES): ${cmd[*]}"
-            timeout "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
+            timeout --kill-after=30s "$EXP_TIMEOUT" "${cmd[@]}" >> "$exp_dir/output.log" 2>&1 &
             local node0_pid=$!
 
             # Block until node-0 serverEnter()
@@ -412,6 +412,7 @@ run_experiment() {
             bench_exit=$?
             _CLEANUP_PID=""
 
+            sudo pkill -9 newbench 2>/dev/null || true
             kill_memory_nodes "$kNodeCount"
 
             if [[ $bench_exit -eq 124 ]]; then
