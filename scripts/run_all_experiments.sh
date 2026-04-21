@@ -4,7 +4,9 @@
 #
 # Usage:
 #   bash run_all_experiments.sh # Run everything
-#   bash run_all_experiments.sh --phase A # Run only Phase A
+#   bash run_all_experiments.sh --phase A           # Run only Phase A (both distributions)
+#   bash run_all_experiments.sh --phase A-zipfian   # Run Phase A zipfian only
+#   bash run_all_experiments.sh --phase A-uniform   # Run Phase A uniform only
 #   bash run_all_experiments.sh --resume # Skip completed experiments
 #
 # Results saved to: /mydata/results/<timestamp>/
@@ -295,19 +297,26 @@ run_experiment() {
         log "  Running DEX benchmark with op_index=$op_index (read=$read_ratio, insert=$insert_ratio, update=$update_ratio, delete=$delete_ratio, range=$range_ratio), uniform_flag=$uniform_flag, zipf_theta=$zipf_theta"
 
         # DEX benchmark parameters which mirror defaults again
-        local mem_threads=4 
-        local cache_mb=256 
-        local bulk_million=50 
-        local warmup_million=10     
-        local op_million=50         
-        local check_correctness=0   
-        local time_based=1          
-        local early_stop=1          
-        local index_type=0          
-        local rpc_rate=1            
-        local admission_rate=0.1    
-        local auto_tune=0           
+        local mem_threads=4
+        local cache_mb=256
+        local bulk_million=50
+        local warmup_million=10
+        local op_million=50
+        local check_correctness=0
+        local time_based=1
+        local early_stop=1
+        local index_type=0
+        local rpc_rate=1
+        local admission_rate=0.1
+        local auto_tune=0
         local kMaxThread=36
+        # cache_mode: 0=baseline (global-lock eviction), 1=cooling-map only, 2=full DEX
+        local cache_mode=2
+        case "$system" in
+            dex-baseline-cache) cache_mode=0 ;;
+            dex-cooling-map)    cache_mode=1 ;;
+            *)                  cache_mode=2 ;;
+        esac
 
         # Allow extra tags to override bulk dataset size and/or cache size
         if [[ "$extra" =~ bulk([0-9]+)m ]]; then
@@ -318,7 +327,9 @@ run_experiment() {
         elif [[ "$extra" =~ cachepct([0-9]+) ]]; then
             local _pct="${BASH_REMATCH[1]}"
             cache_mb=$(( bulk_million * 16 * _pct / 100 ))
-        elif [[ "$extra" =~ memthreads([0-9]+) ]]; then
+        fi
+        # Parsed separately so it can coexist with cachepct/bulk overrides
+        if [[ "$extra" =~ memthreads([0-9]+) ]]; then
             mem_threads="${BASH_REMATCH[1]}"
         fi
 
@@ -334,7 +345,7 @@ run_experiment() {
             "$bulk_million" "$warmup_million" "$op_million"
             "$check_correctness" "$time_based" "$early_stop"
             "$index_type" "$rpc_rate" "$admission_rate" "$auto_tune"
-            "$kMaxThread"
+            "$kMaxThread" "$cache_mode"
         )
 
         {
@@ -431,14 +442,21 @@ run_experiment() {
     log "  DONE: $tag (${elapsed}s)"
 }
 
+run_phase_a_dist() {
+    local dist="$1"
+    log "========== PHASE A [$dist]: DEX Scalability (Figures 6 & 7) =========="
+    for wl in "${WORKLOADS[@]}"; do
+        for tc in "${THREAD_COUNTS[@]}"; do
+            run_experiment "dex" "$wl" "$dist" "$tc"
+        done
+    done
+    log "========== PHASE A [$dist] COMPLETE =========="
+}
+
 run_phase_a() {
     log "========== PHASE A: DEX Scalability (Figures 6 & 7) =========="
     for dist in "${DISTRIBUTIONS[@]}"; do
-        for wl in "${WORKLOADS[@]}"; do
-            for tc in "${THREAD_COUNTS[@]}"; do
-                run_experiment "dex" "$wl" "$dist" "$tc"
-            done
-        done
+        run_phase_a_dist "$dist"
     done
     log "========== PHASE A COMPLETE =========="
 }
@@ -477,10 +495,11 @@ run_phase_c() {
 
 run_phase_d() {
     log "========== PHASE D: Offloading Sensitivity (Figure 12) =========="
+    # Paper §8.4: cache set to 1% of dataset to force offloading; 200M bulk load
     for mem_threads in 0 1 2 4; do
         for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex" "read-intensive" "zipfian" "$tc" "memthreads${mem_threads}"
-            run_experiment "dex" "write-intensive" "zipfian" "$tc" "memthreads${mem_threads}"
+            run_experiment "dex" "read-intensive"  "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}"
+            run_experiment "dex" "write-intensive" "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}"
         done
     done
     log "========== PHASE D COMPLETE =========="
@@ -513,6 +532,8 @@ fi
 OVERALL_START=$(date +%s)
 
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "A" ]; then run_phase_a; fi
+if [ "$PHASE_FILTER" = "A-zipfian" ]; then run_phase_a_dist "zipfian"; fi
+if [ "$PHASE_FILTER" = "A-uniform"  ]; then run_phase_a_dist "uniform";  fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "B" ]; then run_phase_b; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_c; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_d; fi
