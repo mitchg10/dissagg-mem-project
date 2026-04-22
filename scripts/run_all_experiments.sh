@@ -436,8 +436,8 @@ run_experiment() {
     local end_time=$(date +%s)
     local elapsed=$((end_time - start_time))
 
-    # Mark experiment done
-    if [[ $bench_exit -ne 124 && $bench_exit -ne 137 ]]; then
+    # Mark experiment done only on clean exit; crashes and timeouts should not produce .done files
+    if [[ $bench_exit -eq 0 ]]; then
         echo "$tag completed in ${elapsed}s at $(date)" > "${exp_dir}/experiment_${tag}.done"
     else
         log "  Skipping .done marker; experiment can be retried with --resume"
@@ -508,10 +508,20 @@ run_phase_c() {
 run_phase_d() {
     log "========== PHASE D: Offloading Sensitivity (Figure 12) =========="
     # Paper §8.4: cache set to 1% of dataset to force offloading; 200M bulk load
-    for mem_threads in 0 1 2 4; do
+    # memthreads=0 is invalid: Directory.cpp divides dsmSize by memThreadCount at init
+    # timeout scales with memthreads: fewer threads = slower two-sided RDMA on memory nodes
+    local mem_timeout
+    for mem_threads in 1 2 4; do
+        case $mem_threads in
+            1) mem_timeout=10800 ;;   # ~3h: ~4x slower memory-side RDMA processing vs 4 threads
+            2) mem_timeout=7200  ;;   # ~2h: ~2x slower
+            4) mem_timeout=3600  ;;   # ~1h: same as Phase C
+        esac
         for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex" "read-intensive"  "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}_timeout3600s"
-            run_experiment "dex" "write-intensive" "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}_timeout3600s"
+            run_experiment "dex" "read-intensive"  "zipfian" "$tc" \
+                "cachepct1_bulk200m_memthreads${mem_threads}_timeout${mem_timeout}s"
+            run_experiment "dex" "write-intensive" "zipfian" "$tc" \
+                "cachepct1_bulk200m_memthreads${mem_threads}_timeout${mem_timeout}s"
         done
     done
     log "========== PHASE D COMPLETE =========="
