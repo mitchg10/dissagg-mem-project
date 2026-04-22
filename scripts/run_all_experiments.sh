@@ -420,8 +420,8 @@ run_experiment() {
             sudo pkill -9 newbench 2>/dev/null || true
             kill_memory_nodes "$kNodeCount"
 
-            if [[ $bench_exit -eq 124 ]]; then
-                log "  WARNING: experiment timed out after ${EXP_TIMEOUT}s (attempt $attempt/$MAX_RETRIES)"
+            if [[ $bench_exit -eq 124 || $bench_exit -eq 137 ]]; then
+                log "  WARNING: experiment timed out (exit $bench_exit) after ${exp_timeout}s (attempt $attempt/$MAX_RETRIES)"
                 (( attempt < MAX_RETRIES )) && continue
                 log "  FAILED: all $MAX_RETRIES attempts timed out — $tag"
             else
@@ -437,7 +437,7 @@ run_experiment() {
     local elapsed=$((end_time - start_time))
 
     # Mark experiment done
-    if [[ $bench_exit -ne 124 ]]; then
+    if [[ $bench_exit -ne 124 && $bench_exit -ne 137 ]]; then
         echo "$tag completed in ${elapsed}s at $(date)" > "${exp_dir}/experiment_${tag}.done"
     else
         log "  Skipping .done marker; experiment can be retried with --resume"
@@ -489,17 +489,17 @@ run_phase_c() {
     log "========== PHASE C: Cache Studies (Figures 9, 11) =========="
 
     # Figure 9: Cache design choices (200M dataset for meaningful comparison)
-    # timeout1200s: 200M bulk load takes ~7 min over RDMA; 1200s gives headroom for load+warmup+measurement
+    # timeout3600s: 200M bulk load takes ~35 min on d6515 RoCE (vs ~7 min on InfiniBand); 3600s gives headroom
     for cache_mb in 64 256; do
-        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout1200s"
-        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout1200s"
-        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout1200s"
+        run_experiment "dex-baseline-cache"    "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout3600s"
+        run_experiment "dex-cooling-map"        "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout3600s"
+        run_experiment "dex-leaf-admission"     "read-intensive" "zipfian" 84 "cache${cache_mb}mb_bulk200m_timeout3600s"
     done
 
     # Figure 11: Cache size sensitivity (200M dataset; cachepct derives MB from bulk_million)
     for pct in 1 2 4 8 16 32 64; do
-        run_experiment "dex" "read-intensive" "zipfian" 84 "cachepct${pct}_bulk200m_timeout1200s"
-        run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct${pct}_bulk200m_timeout1200s"
+        run_experiment "dex" "read-intensive" "zipfian" 84 "cachepct${pct}_bulk200m_timeout3600s"
+        run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct${pct}_bulk200m_timeout3600s"
     done
 
     log "========== PHASE C COMPLETE =========="
@@ -510,8 +510,8 @@ run_phase_d() {
     # Paper §8.4: cache set to 1% of dataset to force offloading; 200M bulk load
     for mem_threads in 0 1 2 4; do
         for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex" "read-intensive"  "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}"
-            run_experiment "dex" "write-intensive" "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}"
+            run_experiment "dex" "read-intensive"  "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}_timeout3600s"
+            run_experiment "dex" "write-intensive" "zipfian" "$tc" "cachepct1_bulk200m_memthreads${mem_threads}_timeout3600s"
         done
     done
     log "========== PHASE D COMPLETE =========="
