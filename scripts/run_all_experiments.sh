@@ -7,6 +7,7 @@
 #   bash run_all_experiments.sh --phase A           # Run only Phase A (both distributions)
 #   bash run_all_experiments.sh --phase A-zipfian   # Run Phase A zipfian only
 #   bash run_all_experiments.sh --phase A-uniform   # Run Phase A uniform only
+#   bash run_all_experiments.sh --phase Incomplete  # Retry previously failed experiments
 #   bash run_all_experiments.sh --resume # Skip completed experiments
 #
 # Results saved to: /mydata/results/<timestamp>/
@@ -536,6 +537,28 @@ run_phase_e() {
     log "========== PHASE E COMPLETE =========="
 }
 
+run_phase_incomplete() {
+    log "========== PHASE Incomplete: Failed experiments to retry =========="
+
+    # Phase B failures — all 4 systems failed at uniform 2t/14t/28t
+    for system in dex-onesided dex-partitioning dex-cache dex-full; do
+        for tc in 2 14 28; do
+            run_experiment "$system" "write-intensive" "uniform" "$tc" "ablation"
+        done
+    done
+
+    # Phase C failures — root-pointer crash after bulk load
+    run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct2_bulk200m_timeout3600s"
+    run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct4_bulk200m_timeout3600s"
+    run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct16_bulk200m_timeout3600s"
+    run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct8_bulk200m_timeout3600s"
+    run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct64_bulk200m_timeout3600s"
+    run_experiment "dex-baseline-cache"  "read-intensive" "zipfian" 84 "cache64mb_bulk200m_timeout3600s"
+    run_experiment "dex-leaf-admission"  "read-intensive" "zipfian" 84 "cache256mb_bulk200m_timeout3600s"
+
+    log "========== PHASE Incomplete COMPLETE =========="
+}
+
 # MAIN
 log "DEX Experiment Suite starting at $(date)"
 log "Results directory: $RESULTS_DIR"
@@ -561,6 +584,7 @@ if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "B" ]; then run_phase_b; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_c; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_d; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_e; fi
+if [ "$PHASE_FILTER" = "Incomplete" ]; then run_phase_incomplete; fi
 
 OVERALL_END=$(date +%s)
 OVERALL_ELAPSED=$(( (OVERALL_END - OVERALL_START) / 60 ))
