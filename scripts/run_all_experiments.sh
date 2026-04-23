@@ -541,10 +541,11 @@ run_phase_incomplete() {
     log "========== PHASE Incomplete: Failed experiments to retry =========="
 
     # Phase B failures — all 4 systems failed at uniform 2t/14t/28t
+    # Uniform distribution with few threads = no cache locality, every op is RDMA; needs longer timeout
     for system in dex-onesided dex-partitioning dex-cache dex-full; do
-        for tc in 2 14 28; do
-            run_experiment "$system" "write-intensive" "uniform" "$tc" "ablation"
-        done
+        run_experiment "$system" "write-intensive" "uniform" 2  "ablation_timeout1800s"
+        run_experiment "$system" "write-intensive" "uniform" 14 "ablation_timeout900s"
+        run_experiment "$system" "write-intensive" "uniform" 28 "ablation_timeout900s"
     done
 
     # Phase C failures — root-pointer crash after bulk load
