@@ -280,12 +280,78 @@ _CACHE_DESIGN_LABELS = {
     'dex-leaf-admission':   '+ Leaf admission control',
 }
 
+_WORKLOAD_ORDER = ['read-only', 'read-intensive', 'write-intensive',
+                   'insert-intensive', 'scan-intensive']
+_WORKLOAD_SUBPLOT_LABELS = {
+    'read-only':        '(a) Read-only',
+    'read-intensive':   '(b) Read-intensive',
+    'write-intensive':  '(c) Write-intensive',
+    'insert-intensive': '(d) Insert-intensive',
+    'scan-intensive':   '(e) Scan-intensive',
+}
+
 
 def _throughput(row):
     v = row.get('throughput_straggler_mops')
     if v is None:
         v = row.get('throughput_max_mops')
     return v
+
+
+def plot_phase_A(rows, out_dir):
+    """Reproduce Figures 6 & 7: DEX scalability under skewed and uniform workloads."""
+    import matplotlib.pyplot as plt
+
+    data = [
+        r for r in rows
+        if r['phase'] == 'A'
+        and r['system'] == 'dex'
+        and not r.get('extra', '')
+        and _throughput(r) is not None
+    ]
+    if not data:
+        print("  [warn] No Phase A data found for Figures 6 & 7.")
+        return
+
+    for dist, fig_num, dist_label, fname_tag in [
+        ('zipfian', '6', 'Skewed',  'skewed'),
+        ('uniform', '7', 'Uniform', 'uniform'),
+    ]:
+        subset = [r for r in data if r['distribution'] == dist]
+        if not subset:
+            print(f"  [warn] No Phase A {dist} data — skipping Fig. {fig_num}.")
+            continue
+
+        fig, axes = plt.subplots(1, 5, figsize=(16, 4), sharey=False)
+        thread_ticks = sorted({r['threads'] for r in subset})
+
+        for ax, wl in zip(axes, _WORKLOAD_ORDER):
+            wl_rows = sorted(
+                [r for r in subset if r['workload'] == wl],
+                key=lambda r: r['threads'],
+            )
+            if wl_rows:
+                xs = [r['threads'] for r in wl_rows]
+                ys = [_throughput(r) for r in wl_rows]
+                ax.plot(xs, ys, marker='o', color='#4878d0',
+                        linewidth=1.5, markersize=5, label='DEX')
+            ax.set_xlabel('Number of threads')
+            ax.set_ylabel('Million ops/second')
+            ax.set_title(_WORKLOAD_SUBPLOT_LABELS[wl])
+            ax.set_xticks(thread_ticks)
+            ax.legend(fontsize=8)
+            ax.grid(True, linestyle='--', alpha=0.4)
+
+        fig.suptitle(
+            f'Fig. {fig_num} Reproduction — Throughput under {dist_label} Workloads'
+            '\n(DEX only; Sherman/SMART not rerun)',
+            fontsize=11,
+        )
+        fig.tight_layout()
+        out_path = os.path.join(out_dir, f'fig_A_fig{fig_num}_{fname_tag}_scalability.pdf')
+        fig.savefig(out_path, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Saved: {out_path}")
 
 
 def plot_phase_B(rows, out_dir):
@@ -557,14 +623,17 @@ def plot_phase_E(rows, out_dir):
         ax.plot(xs, ys, marker=marker, color=color,
                 linewidth=1.8, markersize=6, label=f'{cache_mb} MB')
 
-        # Shade the repartitioning region (contiguous zeros after first non-zero)
+        # Shade the repartitioning region: throughput dips below 85% of pre-repartition average.
+        # Zero-based detection doesn't work because DEX shows graceful degradation, not full stall.
+        pre_avg = sum(ys[:2]) / len(ys[:2]) if len(ys) >= 2 else (ys[0] if ys else 1.0)
+        threshold = pre_avg * 0.85
         in_repart = False
         repart_start = repart_end = None
         for i, y in enumerate(ys):
-            if not in_repart and y == 0.0:
+            if not in_repart and y < threshold:
                 in_repart = True
                 repart_start = xs[i] - 0.5
-            elif in_repart and y != 0.0:
+            elif in_repart and y >= threshold:
                 repart_end = xs[i] - 0.5
                 break
         if repart_start is not None and repart_end is None:
@@ -590,6 +659,7 @@ def plot_phase_E(rows, out_dir):
 def plot_figures(rows, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     print(f"\nGenerating figures in: {out_dir}")
+    plot_phase_A(rows, out_dir)
     plot_phase_B(rows, out_dir)
     plot_phase_C_fig9(rows, out_dir)
     plot_phase_C_fig11(rows, out_dir)

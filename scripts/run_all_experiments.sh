@@ -319,6 +319,18 @@ run_experiment() {
             *)                  cache_mode=2 ;;
         esac
 
+        # Ablation-mode overrides: each dex-* ablation name maps to distinct parameters.
+        # dex-onesided: pure one-sided RDMA, global-lock cache, no RPC offloading
+        # dex-partitioning: + partitioned (cooling-map) eviction
+        # dex-cache: + leaf admission control
+        # dex-full: + compute offloading via RPC (full DEX)
+        case "$system" in
+            dex-onesided)     rpc_rate=0; cache_mode=0; admission_rate=1.0 ;;
+            dex-partitioning) rpc_rate=0; cache_mode=1; admission_rate=1.0 ;;
+            dex-cache)        rpc_rate=0; cache_mode=2; admission_rate=0.1  ;;
+            dex-full)         rpc_rate=1; cache_mode=2; admission_rate=0.1  ;;
+        esac
+
         # Allow extra tags to override bulk dataset size and/or cache size
         if [[ "$extra" =~ bulk([0-9]+)m ]]; then
             bulk_million="${BASH_REMATCH[1]}"
@@ -547,6 +559,10 @@ run_phase_incomplete() {
         run_experiment "$system" "write-intensive" "uniform" 14 "ablation_timeout900s"
         run_experiment "$system" "write-intensive" "uniform" 28 "ablation_timeout900s"
     done
+
+    # Phase C failures — bulk load timeout (doubled to 7200s)
+    run_experiment "dex-baseline-cache" "read-intensive" "zipfian" 84 "cache64mb_bulk200m_timeout7200s"
+    run_experiment "dex-leaf-admission" "read-intensive" "zipfian" 84 "cache256mb_bulk200m_timeout7200s"
 
     # Phase C failures — root-pointer crash after bulk load
     run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct2_bulk200m_timeout3600s"
