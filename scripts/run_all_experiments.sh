@@ -471,7 +471,7 @@ run_phase_a_dist() {
     log "========== PHASE A [$dist]: DEX Scalability (Figures 6 & 7) =========="
     for wl in "${WORKLOADS[@]}"; do
         for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex" "$wl" "$dist" "$tc"
+            run_experiment "dex" "$wl" "$dist" "$tc" "timeout900s"
         done
     done
     log "========== PHASE A [$dist] COMPLETE =========="
@@ -489,10 +489,10 @@ run_phase_b() {
     log "========== PHASE B: Ablation Study (Figure 8) =========="
     for dist in "zipfian" "uniform"; do
         for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex-onesided"     "write-intensive" "$dist" "$tc" "ablation"
-            run_experiment "dex-partitioning"  "write-intensive" "$dist" "$tc" "ablation"
-            run_experiment "dex-cache"         "write-intensive" "$dist" "$tc" "ablation"
-            run_experiment "dex-full"          "write-intensive" "$dist" "$tc" "ablation"
+            run_experiment "dex-onesided"     "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+            run_experiment "dex-partitioning"  "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+            run_experiment "dex-cache"         "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+            run_experiment "dex-full"          "write-intensive" "$dist" "$tc" "ablation_timeout900s"
         done
     done
     log "========== PHASE B COMPLETE =========="
@@ -551,28 +551,9 @@ run_phase_e() {
 
 run_phase_incomplete() {
     log "========== PHASE Incomplete: Failed experiments to retry =========="
-
-    # Phase B failures — all 4 systems failed at uniform 2t/14t/28t
-    # Uniform distribution with few threads = no cache locality, every op is RDMA; needs longer timeout
-    for system in dex-onesided dex-partitioning dex-cache dex-full; do
-        run_experiment "$system" "write-intensive" "uniform" 2  "ablation_timeout1800s"
-        run_experiment "$system" "write-intensive" "uniform" 14 "ablation_timeout900s"
-        run_experiment "$system" "write-intensive" "uniform" 28 "ablation_timeout900s"
-    done
-
-    # Phase C failures — bulk load timeout (doubled to 7200s)
-    run_experiment "dex-baseline-cache" "read-intensive" "zipfian" 84 "cache64mb_bulk200m_timeout7200s"
-    run_experiment "dex-leaf-admission" "read-intensive" "zipfian" 84 "cache256mb_bulk200m_timeout7200s"
-
-    # Phase C failures — root-pointer crash after bulk load
-    run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct2_bulk200m_timeout3600s"
-    run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct4_bulk200m_timeout3600s"
-    run_experiment "dex" "read-intensive"  "zipfian" 84 "cachepct16_bulk200m_timeout3600s"
-    run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct8_bulk200m_timeout3600s"
-    run_experiment "dex" "write-intensive" "zipfian" 84 "cachepct64_bulk200m_timeout3600s"
-    run_experiment "dex-baseline-cache"  "read-intensive" "zipfian" 84 "cache64mb_bulk200m_timeout3600s"
-    run_experiment "dex-leaf-admission"  "read-intensive" "zipfian" 84 "cache256mb_bulk200m_timeout3600s"
-
+    # All previously-failed Phase C experiments are now complete.
+    # All remaining failures (5 Phase B ablation runs) are covered by --phase B.
+    log "  Nothing to retry — all incomplete experiments are queued under Phase B."
     log "========== PHASE Incomplete COMPLETE =========="
 }
 
