@@ -355,6 +355,11 @@ run_experiment() {
         if [[ "$extra" =~ timeout([0-9]+)s ]]; then
             exp_timeout="${BASH_REMATCH[1]}"
         fi
+        # Phase F: override zipf_theta from extra tag (e.g. theta030 → 0.30)
+        if [[ "$extra" =~ theta([0-9]+) ]]; then
+            local _tval="${BASH_REMATCH[1]}"
+            zipf_theta=$(python3 -c "print(int('${_tval}') / 100)")
+        fi
 
 
         local total_threads="$threads"
@@ -485,15 +490,22 @@ run_phase_a() {
     log "========== PHASE A COMPLETE =========="
 }
 
+run_phase_b_dist() {
+    local dist="$1"
+    log "========== PHASE B [$dist]: Ablation Study (Figure 8) =========="
+    for tc in "${THREAD_COUNTS[@]}"; do
+        run_experiment "dex-onesided"     "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+        run_experiment "dex-partitioning" "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+        run_experiment "dex-cache"        "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+        run_experiment "dex-full"         "write-intensive" "$dist" "$tc" "ablation_timeout900s"
+    done
+    log "========== PHASE B [$dist] COMPLETE =========="
+}
+
 run_phase_b() {
     log "========== PHASE B: Ablation Study (Figure 8) =========="
     for dist in "zipfian" "uniform"; do
-        for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex-onesided"     "write-intensive" "$dist" "$tc" "ablation_timeout900s"
-            run_experiment "dex-partitioning"  "write-intensive" "$dist" "$tc" "ablation_timeout900s"
-            run_experiment "dex-cache"         "write-intensive" "$dist" "$tc" "ablation_timeout900s"
-            run_experiment "dex-full"          "write-intensive" "$dist" "$tc" "ablation_timeout900s"
-        done
+        run_phase_b_dist "$dist"
     done
     log "========== PHASE B COMPLETE =========="
 }
@@ -549,11 +561,35 @@ run_phase_e() {
     log "========== PHASE E COMPLETE =========="
 }
 
+run_phase_f() {
+    log "========== PHASE F: Zipf Theta Sensitivity =========="
+    local thetas=("030" "050" "070" "090" "099")
+    for tc in 28 84; do
+        for wl in "read-intensive" "write-intensive"; do
+            for theta in "${thetas[@]}"; do
+                run_experiment "dex" "$wl" "zipfian" "$tc" "theta${theta}_timeout900s"
+            done
+        done
+    done
+    log "========== PHASE F COMPLETE =========="
+}
+
 run_phase_incomplete() {
     log "========== PHASE Incomplete: Failed experiments to retry =========="
-    # All previously-failed Phase C experiments are now complete.
-    # All remaining failures (5 Phase B ablation runs) are covered by --phase B.
-    log "  Nothing to retry — all incomplete experiments are queued under Phase B."
+
+    # Phase A: read-only uniform timed out at 900s on all 3 attempts (exit 137, no throughput)
+    for tc in 2 14 28; do
+        run_experiment "dex" "read-only" "uniform" "$tc" "timeout900s"
+    done
+
+    # Phase B uniform ablation — result dirs already in dex-results/Incomplete/
+    # 2t uses timeout1800s (900s proved too short); 14t and 28t keep timeout900s
+    for sys in dex-onesided dex-partitioning dex-cache dex-full; do
+        run_experiment "$sys" "write-intensive" "uniform" 2  "ablation_timeout1800s"
+        run_experiment "$sys" "write-intensive" "uniform" 14 "ablation_timeout900s"
+        run_experiment "$sys" "write-intensive" "uniform" 28 "ablation_timeout900s"
+    done
+
     log "========== PHASE Incomplete COMPLETE =========="
 }
 
@@ -579,9 +615,12 @@ if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "A" ]; then run_phase_a; fi
 if [ "$PHASE_FILTER" = "A-zipfian" ]; then run_phase_a_dist "zipfian"; fi
 if [ "$PHASE_FILTER" = "A-uniform"  ]; then run_phase_a_dist "uniform";  fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "B" ]; then run_phase_b; fi
+if [ "$PHASE_FILTER" = "B-zipfian" ]; then run_phase_b_dist "zipfian"; fi
+if [ "$PHASE_FILTER" = "B-uniform"  ]; then run_phase_b_dist "uniform";  fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "C" ]; then run_phase_c; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "D" ]; then run_phase_d; fi
 if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "E" ]; then run_phase_e; fi
+if [ -z "$PHASE_FILTER" ] || [ "$PHASE_FILTER" = "F" ]; then run_phase_f; fi
 if [ "$PHASE_FILTER" = "Incomplete" ]; then run_phase_incomplete; fi
 
 OVERALL_END=$(date +%s)
