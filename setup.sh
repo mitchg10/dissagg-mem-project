@@ -24,11 +24,15 @@ sudo apt-get install -y -qq \
 
 echo "Installing GCC 13..."
 if ! gcc-13 --version &>/dev/null; then
-    sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y >/dev/null 2>&1
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq gcc-13 g++-13
-    sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-    sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+    if sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y >/dev/null 2>&1 && sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13; then
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+    else
+        echo "GCC 13 installation failed, installing GCC 12..."
+        sudo apt-get install -y -qq gcc-12 g++-12
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+    fi
 fi
 echo "  GCC version: $(gcc --version | head -1)"
 
