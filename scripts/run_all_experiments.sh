@@ -333,9 +333,15 @@ run_experiment() {
             dex-full)         rpc_rate=1; cache_mode=2; admission_rate=0.1  ;;
         esac
 
-        # Allow extra tags to override bulk dataset size and/or cache size
+        # Allow extra tags to override bulk dataset size, op count, and/or cache size
         if [[ "$extra" =~ bulk([0-9]+)m ]]; then
             bulk_million="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$extra" =~ ops([0-9]+)m ]]; then
+            op_million="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$extra" =~ warmup([0-9]+)m ]]; then
+            warmup_million="${BASH_REMATCH[1]}"
         fi
         if [[ "$extra" =~ cache([0-9]+)mb ]]; then
             cache_mb="${BASH_REMATCH[1]}"
@@ -481,7 +487,7 @@ run_phase_a_dist() {
         # 3 thread counts instead of 5 reduces total from 25→15 experiments (~3 hrs vs never).
         for wl in "${WORKLOADS[@]}"; do
             for tc in "${THREAD_COUNTS_UNIFORM[@]}"; do
-                run_experiment "dex" "$wl" "$dist" "$tc" "bulk20m_timeout1200s"
+                run_experiment "dex" "$wl" "$dist" "$tc" "bulk20m_warmup2m_ops5m_timeout1200s"
             done
         done
     else
