@@ -26,6 +26,8 @@ RESULTS_DIR="${RESULTS_BASE}/${TIMESTAMP}"
 
 # Paper uses: 2, 18, 36, 72, 108, 144
 THREAD_COUNTS=(2 14 28 56 84) # Adapted for d6515
+# Scaled-down for uniform: 3 points still shows scalability trend for Fig 7
+THREAD_COUNTS_UNIFORM=(14 28 84)
 
 EXP_TIMEOUT=${EXP_TIMEOUT:-450}
 MAX_RETRIES=${MAX_RETRIES:-3}
@@ -474,11 +476,21 @@ run_experiment() {
 run_phase_a_dist() {
     local dist="$1"
     log "========== PHASE A [$dist]: DEX Scalability (Figures 6 & 7) =========="
-    for wl in "${WORKLOADS[@]}"; do
-        for tc in "${THREAD_COUNTS[@]}"; do
-            run_experiment "dex" "$wl" "$dist" "$tc" "timeout900s"
+    if [[ "$dist" == "uniform" ]]; then
+        # Scaled down: 20M dataset keeps working set above 256MB cache.
+        # 3 thread counts instead of 5 reduces total from 25→15 experiments (~3 hrs vs never).
+        for wl in "${WORKLOADS[@]}"; do
+            for tc in "${THREAD_COUNTS_UNIFORM[@]}"; do
+                run_experiment "dex" "$wl" "$dist" "$tc" "bulk20m_timeout1200s"
+            done
         done
-    done
+    else
+        for wl in "${WORKLOADS[@]}"; do
+            for tc in "${THREAD_COUNTS[@]}"; do
+                run_experiment "dex" "$wl" "$dist" "$tc" "timeout900s"
+            done
+        done
+    fi
     log "========== PHASE A [$dist] COMPLETE =========="
 }
 
@@ -588,6 +600,24 @@ run_phase_incomplete() {
         run_experiment "$sys" "write-intensive" "uniform" 2  "ablation_timeout1800s"
         run_experiment "$sys" "write-intensive" "uniform" 14 "ablation_timeout900s"
         run_experiment "$sys" "write-intensive" "uniform" 28 "ablation_timeout900s"
+    done
+
+    # Phase F: theta sensitivity — dex-results/F run (2026-05-02)
+    # 28t: ALL theta values failed for both workloads (including theta099 which passes in Phase A).
+    #   Likely cluster state issue from the long prior run; retry clean.
+    # 84t read-intensive: theta030–090 timed out; theta099 succeeded (514s) — skip it.
+    # 84t write-intensive: theta030–050 timed out; theta070–099 never ran (run was cut short).
+    local thetas=("030" "050" "070" "090" "099")
+    for wl in "read-intensive" "write-intensive"; do
+        for theta in "${thetas[@]}"; do
+            run_experiment "dex" "$wl" "zipfian" 28 "theta${theta}_timeout900s"
+        done
+    done
+    for theta in "030" "050" "070" "090"; do
+        run_experiment "dex" "read-intensive"  "zipfian" 84 "theta${theta}_timeout900s"
+    done
+    for theta in "${thetas[@]}"; do
+        run_experiment "dex" "write-intensive" "zipfian" 84 "theta${theta}_timeout900s"
     done
 
     log "========== PHASE Incomplete COMPLETE =========="
