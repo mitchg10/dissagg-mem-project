@@ -585,7 +585,7 @@ run_phase_f() {
     for tc in 28 84; do
         for wl in "read-intensive" "write-intensive"; do
             for theta in "${thetas[@]}"; do
-                run_experiment "dex" "$wl" "zipfian" "$tc" "theta${theta}_timeout900s"
+                run_experiment "dex" "$wl" "zipfian" "$tc" "theta${theta}_bulk20m_warmup2m_ops5m_timeout1200s"
             done
         done
     done
@@ -608,22 +608,14 @@ run_phase_incomplete() {
         run_experiment "$sys" "write-intensive" "uniform" 28 "ablation_timeout900s"
     done
 
-    # Phase F: theta sensitivity — dex-results/F run (2026-05-02)
-    # 28t: ALL theta values failed for both workloads (including theta099 which passes in Phase A).
-    #   Likely cluster state issue from the long prior run; retry clean.
-    # 84t read-intensive: theta030–090 timed out; theta099 succeeded (514s) — skip it.
-    # 84t write-intensive: theta030–050 timed out; theta070–099 never ran (run was cut short).
+    # Phase F: theta sensitivity — scaled down (bulk20m_warmup2m_ops5m) to match run_phase_f
     local thetas=("030" "050" "070" "090" "099")
-    for wl in "read-intensive" "write-intensive"; do
-        for theta in "${thetas[@]}"; do
-            run_experiment "dex" "$wl" "zipfian" 28 "theta${theta}_timeout900s"
+    for tc in 28 84; do
+        for wl in "read-intensive" "write-intensive"; do
+            for theta in "${thetas[@]}"; do
+                run_experiment "dex" "$wl" "zipfian" "$tc" "theta${theta}_bulk20m_warmup2m_ops5m_timeout1200s"
+            done
         done
-    done
-    for theta in "030" "050" "070" "090"; do
-        run_experiment "dex" "read-intensive"  "zipfian" 84 "theta${theta}_timeout900s"
-    done
-    for theta in "${thetas[@]}"; do
-        run_experiment "dex" "write-intensive" "zipfian" 84 "theta${theta}_timeout900s"
     done
 
     log "========== PHASE Incomplete COMPLETE =========="
